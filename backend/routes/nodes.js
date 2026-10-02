@@ -13,8 +13,15 @@ router.get('/:floorId', async (req, res) => {
 router.post('/', async (req, res) => {
   if (req.body.type === 'stair') {
     const stairPart = Number(req.body.stairPart)
+    const stairGroup = typeof req.body.stairGroup === 'string'
+      ? req.body.stairGroup.trim()
+      : ''
     if (![1, 2].includes(stairPart)) {
       return res.status(400).json({ message: 'Stair part must be 1 or 2.' })
+    }
+
+    if (req.body.stairGroup !== undefined && typeof req.body.stairGroup !== 'string') {
+      return res.status(400).json({ message: 'Stair group must be text.' })
     }
 
     const floor = await Floor.findById(req.body.floorId)
@@ -38,8 +45,13 @@ router.post('/', async (req, res) => {
   }
 
   const node = await Node.create({
-    name: req.body.type === 'stair' ? `Stair P${req.body.stairPart}` : req.body.name,
+    name: req.body.type === 'stair'
+      ? `${req.body.stairGroup?.trim() ? `${req.body.stairGroup.trim()} - ` : ''}Stair P${req.body.stairPart}`
+      : req.body.name,
     type: req.body.type,
+    stairGroup: req.body.type === 'stair' && req.body.stairGroup?.trim()
+      ? req.body.stairGroup.trim()
+      : undefined,
     stairPart: req.body.type === 'stair' ? Number(req.body.stairPart) : undefined,
     x: req.body.x,
     y: req.body.y,

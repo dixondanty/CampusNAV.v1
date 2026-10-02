@@ -28,6 +28,21 @@
   overflow-wrap: anywhere;
 }
 
+.cross-floor-connection-name {
+  display: grid;
+  gap: 2px;
+}
+
+.cross-floor-connection-name > span[aria-hidden="true"] {
+  color: #7b858d;
+  line-height: 1;
+}
+
+.cross-floor-connection-name small {
+  color: #7b858d;
+  font-size: 0.62rem;
+}
+
 .connection-delete {
   flex: 0 0 auto;
   padding: 3px 5px;

@@ -24,6 +24,7 @@ function MapEditor() {
   const [roomName, setRoomName] = useState('')
   const [roomPosition, setRoomPosition] = useState(null)
   const [stairPosition, setStairPosition] = useState(null)
+  const [stairGroup, setStairGroup] = useState('')
   const [stairPart, setStairPart] = useState('')
   const [name, setName] = useState('')
   const [floorNumber, setFloorNumber] = useState('')
@@ -67,9 +68,28 @@ function MapEditor() {
   const crossFloorToFloor = floors.find(
     (floor) => floor._id === String(crossFloorToNode?.floorId),
   )
+  const crossFloorFromGroup = typeof crossFloorFromNode?.stairGroup === 'string'
+    ? crossFloorFromNode.stairGroup.trim()
+    : ''
+  const crossFloorToOptions = stairPart1Nodes.filter((node) => {
+    if (!crossFloorFromNode) {
+      return true
+    }
+    const toGroup = typeof node.stairGroup === 'string' ? node.stairGroup.trim() : ''
+    if (crossFloorFromGroup !== toGroup) {
+      return false
+    }
+    if (!crossFloorFromGroup) {
+      return true
+    }
+    const floor = floors.find((item) => item._id === String(node.floorId))
+    return Number(floor?.floorNumber) -
+      Number(crossFloorFromFloor?.floorNumber) === 1
+  })
   const validCrossFloorStairPair = Boolean(
     crossFloorFromNode &&
     crossFloorToNode &&
+    crossFloorToOptions.some((node) => node._id === crossFloorToNode._id) &&
     Number(crossFloorToFloor?.floorNumber) - Number(crossFloorFromFloor?.floorNumber) === 1,
   )
   const remoteStairNodes = allStairNodes.filter(
@@ -114,6 +134,11 @@ function MapEditor() {
       ? node.floorId
       : floors.find((item) => item._id === getNodeFloorId(node))
     return floor?.name || node.floorName || 'Unknown floor'
+  }
+
+  function getStairOptionLabel(node) {
+    const group = typeof node.stairGroup === 'string' ? node.stairGroup.trim() : ''
+    return `${getFloorName(node)} — ${group ? `${group} — ` : ''}Stair P${node.stairPart}`
   }
 
   function clearRoute() {
@@ -348,6 +373,7 @@ function MapEditor() {
         return
       }
       setStairPosition({ x, y })
+      setStairGroup('')
       setStairPart(String(allowedStairParts[0]))
       setError('')
       return
@@ -427,6 +453,7 @@ function MapEditor() {
     if (
       !selectedFloor ||
       !stairPosition ||
+      !stairGroup.trim() ||
       !allowedStairParts.includes(Number(stairPart)) ||
       creatingNodeRef.current
     ) {
@@ -438,12 +465,14 @@ function MapEditor() {
     setError('')
     try {
       const part = Number(stairPart)
+      const group = stairGroup.trim()
       const response = await fetch(`${API_URL}/nodes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: `Stair P${part}`,
+          name: group ? `${group} - Stair P${part}` : `Stair P${part}`,
           type: 'stair',
+          ...(group ? { stairGroup: group } : {}),
           stairPart: part,
           x: stairPosition.x,
           y: stairPosition.y,
@@ -459,6 +488,7 @@ function MapEditor() {
         { ...newNode, floorName: selectedFloor.name, floorNumber: selectedFloor.floorNumber },
       ])
       setStairPosition(null)
+      setStairGroup('')
       setStairPart('')
     } catch (createError) {
       setError(createError.message)
@@ -548,14 +578,21 @@ function MapEditor() {
       const upperNode = lowerNode === firstNode ? node : firstNode
       const lowerFloor = lowerNode === firstNode ? firstFloor : secondFloor
       const upperFloor = lowerNode === firstNode ? secondFloor : firstFloor
+      const lowerStairGroup = typeof lowerNode.stairGroup === 'string'
+        ? lowerNode.stairGroup.trim()
+        : ''
+      const upperStairGroup = typeof upperNode.stairGroup === 'string'
+        ? upperNode.stairGroup.trim()
+        : ''
       if (
         firstNode.type !== 'stair' ||
         node.type !== 'stair' ||
         Number(upperFloor?.floorNumber) - Number(lowerFloor?.floorNumber) !== 1 ||
         lowerNode.stairPart !== 2 ||
-        upperNode.stairPart !== 1
+        upperNode.stairPart !== 1 ||
+        lowerStairGroup !== upperStairGroup
       ) {
-        setError('Connect Part 2 on a floor to Part 1 on the immediately higher floor.')
+        setError('Connect matching stair groups: Part 2 on a floor to Part 1 on the immediately higher floor.')
         return
       }
     }
@@ -1123,6 +1160,7 @@ function MapEditor() {
               <select
                 onChange={(event) => {
                   setCrossFloorFromId(event.target.value)
+                  setCrossFloorToId('')
                   setCrossFloorConnectionMessage('')
                 }}
                 value={crossFloorFromId}
@@ -1130,7 +1168,7 @@ function MapEditor() {
                 <option value="">Select lower-floor Stair P2</option>
                 {stairPart2Nodes.map((node) => (
                   <option key={node._id} value={node._id}>
-                    {getFloorName(node)} — Stair P2
+                    {getStairOptionLabel(node)}
                   </option>
                 ))}
               </select>
@@ -1145,9 +1183,9 @@ function MapEditor() {
                 value={crossFloorToId}
               >
                 <option value="">Select higher-floor Stair P1</option>
-                {stairPart1Nodes.map((node) => (
+                {crossFloorToOptions.map((node) => (
                   <option key={node._id} value={node._id}>
-                    {getFloorName(node)} — Stair P1
+                    {getStairOptionLabel(node)}
                   </option>
                 ))}
               </select>
@@ -1301,19 +1339,28 @@ function MapEditor() {
                     return null
                   }
                   const crossesFloors = getNodeFloorId(fromNode) !== getNodeFloorId(toNode)
+                  const stairGroup = typeof fromNode.stairGroup === 'string'
+                    ? fromNode.stairGroup.trim()
+                    : ''
                   const fromName = crossesFloors
-                    ? `${getFloorName(fromNode)} — ${fromNode.name}`
+                    ? `${getFloorName(fromNode)} — P${fromNode.stairPart}`
                     : fromNode.name
                   const toName = crossesFloors
-                    ? `${getFloorName(toNode)} — ${toNode.name}`
+                    ? `${getFloorName(toNode)} — P${toNode.stairPart}`
                     : toNode.name
                   return (
                     <li className="connection-item" key={connection._id}>
-                      <span className="connection-name">
-                        {crossesFloors
-                          ? `${fromName} ↕ ${toName} · Cross-floor`
-                          : `${fromName} ↔ ${toName}`}
-                      </span>
+                      {crossesFloors ? (
+                        <span className="connection-name cross-floor-connection-name">
+                          <strong>{stairGroup || 'Stair connection'}</strong>
+                          <span>{fromName}</span>
+                          <span aria-hidden="true">↕</span>
+                          <span>{toName}</span>
+                          <small>Cross-floor</small>
+                        </span>
+                      ) : (
+                        <span className="connection-name">{fromName} ↔ {toName}</span>
+                      )}
                       <button
                         aria-label={`Delete connection ${fromName} to ${toName}`}
                         className="connection-delete"
@@ -1341,6 +1388,12 @@ function MapEditor() {
               </span>
               {selectedNode.type === 'stair' && (
                 <>
+                  {selectedNode.stairGroup && (
+                    <>
+                      <p className="inspector-label node-type-label">Stair Group</p>
+                      <span className="node-type-value">{selectedNode.stairGroup}</span>
+                    </>
+                  )}
                   <p className="inspector-label node-type-label">Part</p>
                   <span className="node-type-value">Part {selectedNode.stairPart}</span>
                   <p className="inspector-label node-type-label">Floor</p>
@@ -1508,6 +1561,16 @@ function MapEditor() {
               </button>
             </div>
             <form className="floor-form" onSubmit={handleCreateStair}>
+              <label>
+                Staircase / Stair Group
+                <input
+                  autoFocus
+                  onChange={(event) => setStairGroup(event.target.value)}
+                  placeholder="e.g. Main Stair A"
+                  required
+                  value={stairGroup}
+                />
+              </label>
               <label>
                 Stair part
                 <select

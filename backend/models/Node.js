@@ -11,6 +11,10 @@ const nodeSchema = new mongoose.Schema({
     enum: ['nav', 'room', 'stair'],
     required: true,
   },
+  stairGroup: {
+    type: String,
+    trim: true,
+  },
   stairPart: {
     type: Number,
     enum: [1, 2],

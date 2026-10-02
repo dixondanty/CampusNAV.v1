@@ -18,12 +18,12 @@ router.get('/:floorId', async (req, res) => {
   })
     .populate({
       path: 'from',
-      select: 'name type stairPart x y floorId',
+      select: 'name type stairGroup stairPart x y floorId',
       populate: { path: 'floorId', select: 'name floorNumber' },
     })
     .populate({
       path: 'to',
-      select: 'name type stairPart x y floorId',
+      select: 'name type stairGroup stairPart x y floorId',
       populate: { path: 'floorId', select: 'name floorNumber' },
     })
 
@@ -54,6 +54,8 @@ router.post('/', async (req, res) => {
   const sameFloor = fromNode.floorId.toString() === toNode.floorId.toString()
   const fromIsStair = fromNode.type === 'stair'
   const toIsStair = toNode.type === 'stair'
+  let connectionFromNode = fromNode
+  let connectionToNode = toNode
 
   if (sameFloor) {
     const bothNavigation = fromNode.type === 'nav' && toNode.type === 'nav'
@@ -89,16 +91,25 @@ router.post('/', async (req, res) => {
     const upperNode = lowerNode === fromNode ? toNode : fromNode
     const lowerFloor = lowerNode === fromNode ? fromFloor : toFloor
     const upperFloor = lowerNode === fromNode ? toFloor : fromFloor
+    const lowerStairGroup = typeof lowerNode.stairGroup === 'string'
+      ? lowerNode.stairGroup.trim()
+      : ''
+    const upperStairGroup = typeof upperNode.stairGroup === 'string'
+      ? upperNode.stairGroup.trim()
+      : ''
 
     if (
       upperFloor.floorNumber - lowerFloor.floorNumber !== 1 ||
       lowerNode.stairPart !== 2 ||
-      upperNode.stairPart !== 1
+      upperNode.stairPart !== 1 ||
+      lowerStairGroup !== upperStairGroup
     ) {
       return res.status(400).json({
-        message: 'Connect Part 2 on a floor to Part 1 on the immediately higher floor.',
+        message: 'Connect matching stair groups: Part 2 on a floor to Part 1 on the immediately higher floor.',
       })
     }
+    connectionFromNode = lowerNode
+    connectionToNode = upperNode
   }
 
   const existingConnection = await Connection.findOne({
@@ -113,11 +124,12 @@ router.post('/', async (req, res) => {
   }
 
   const distance = Math.sqrt(
-    Math.pow(toNode.x - fromNode.x, 2) + Math.pow(toNode.y - fromNode.y, 2),
+    Math.pow(connectionToNode.x - connectionFromNode.x, 2) +
+      Math.pow(connectionToNode.y - connectionFromNode.y, 2),
   )
   const connection = await Connection.create({
-    from: fromNode._id,
-    to: toNode._id,
+    from: connectionFromNode._id,
+    to: connectionToNode._id,
     distance,
   })
   res.status(201).json(connection)
