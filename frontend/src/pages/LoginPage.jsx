@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 const demoAccounts = {
-  admin: { password: 'admin123', role: 'admin' },
-  user: { password: 'user123', role: 'user' },
+  admin: { password: 'admin_campusnav123', role: 'admin' },
+  user: { password: 'user@123nav', role: 'user' },
 }
 
 function LoginPage() {
@@ -28,9 +28,9 @@ function LoginPage() {
   return (
     <main className="login-page">
       <section className="login-card">
-        <p className="eyebrow">CampusAR</p>
+        <p className="eyebrow">CampusNav</p>
         <h1>Campus Navigation</h1>
-        <p className="intro">Sign in to continue to your CampusAR workspace.</p>
+        <p className="intro">Sign in to continue to your CampusNav workspace.</p>
 
         <form className="login-form" onSubmit={handleSubmit}>
           <label>
@@ -58,8 +58,7 @@ function LoginPage() {
 
         <p className="demo-credentials">
           Demo accounts (presentation only):<br />
-          Admin: <strong>admin / admin123</strong><br />
-          User: <strong>user / user123</strong>
+          User: <strong>user / user@123nav</strong>
         </p>
       </section>
     </main>

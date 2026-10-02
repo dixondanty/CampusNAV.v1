@@ -776,7 +776,7 @@ function MapEditor() {
       <header className="map-editor-topbar">
         <div className="topbar-brand">
           <span className="brand-mark" aria-hidden="true">C</span>
-          <strong>CampusAR</strong>
+          <strong>CampusNav</strong>
           <span className="topbar-divider" />
           <span className="topbar-title">Map Editor</span>
         </div>
