@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const API_URL = `${SERVER_URL}/api`
@@ -74,6 +75,7 @@ function UserPage() {
   const displayFloors = [...floors].sort(
     (first, second) => Number(first.floorNumber) - Number(second.floorNumber),
   )
+  const roomGroups = groupNodesByFloor(rooms, floors)
   const selectedDisplayFloor = displayFloors.find(
     (floor) => String(floor._id) === selectedDisplayFloorId,
   ) || displayFloors[0] || null
@@ -139,10 +141,6 @@ function UserPage() {
   function handleLogout() {
     sessionStorage.removeItem('role')
     navigate('/')
-  }
-
-  function roomLabel(room) {
-    return `${room.name} — ${room.floorName}`
   }
 
   function floorSegments(floorId) {
@@ -218,14 +216,18 @@ function UserPage() {
                 value={startNodeId}
               >
                 <option value="">Select a starting point</option>
-                {rooms.map((room) => (
-                  <option
-                    key={room._id}
-                    value={room._id}
-                    disabled={room._id === endNodeId}
-                  >
-                    {roomLabel(room)}
-                  </option>
+                {roomGroups.map((group) => (
+                  <optgroup key={group.id} label={group.name}>
+                    {group.nodes.map((room) => (
+                      <option
+                        key={room._id}
+                        value={room._id}
+                        disabled={room._id === endNodeId}
+                      >
+                        {room.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </label>
@@ -240,14 +242,18 @@ function UserPage() {
                 value={endNodeId}
               >
                 <option value="">Select a destination</option>
-                {rooms.map((room) => (
-                  <option
-                    key={room._id}
-                    value={room._id}
-                    disabled={room._id === startNodeId}
-                  >
-                    {roomLabel(room)}
-                  </option>
+                {roomGroups.map((group) => (
+                  <optgroup key={group.id} label={group.name}>
+                    {group.nodes.map((room) => (
+                      <option
+                        key={room._id}
+                        value={room._id}
+                        disabled={room._id === startNodeId}
+                      >
+                        {room.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </label>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const API_URL = `${SERVER_URL}/api`
@@ -61,6 +62,7 @@ function MapEditor() {
   const testNodes = allTestNodes.filter((node) =>
     floors.some((floor) => floor._id === String(node.floorId)),
   )
+  const testNodeGroups = groupNodesByFloor(testNodes, floors)
   const stairPart2Nodes = allStairNodes.filter((node) => node.stairPart === 2)
   const stairPart1Nodes = allStairNodes.filter((node) => node.stairPart === 1)
   const crossFloorFromNode = stairPart2Nodes.find((node) => node._id === crossFloorFromId)
@@ -1127,14 +1129,18 @@ function MapEditor() {
                   value={startNodeId}
                 >
                   <option value="">Select starting point</option>
-                  {testNodes.map((node) => (
-                    <option
-                      key={node._id}
-                      value={node._id}
-                      disabled={node._id === endNodeId}
-                    >
-                      {node.name} — Floor {node.floorNumber}
-                    </option>
+                  {testNodeGroups.map((group) => (
+                    <optgroup key={group.id} label={group.name}>
+                      {group.nodes.map((node) => (
+                        <option
+                          key={node._id}
+                          value={node._id}
+                          disabled={node._id === endNodeId}
+                        >
+                          {node.name}
+                        </option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
               </label>
@@ -1148,14 +1154,18 @@ function MapEditor() {
                   value={endNodeId}
                 >
                   <option value="">Select destination</option>
-                  {testNodes.map((node) => (
-                    <option
-                      key={node._id}
-                      value={node._id}
-                      disabled={node._id === startNodeId}
-                    >
-                      {node.name} — Floor {node.floorNumber}
-                    </option>
+                  {testNodeGroups.map((group) => (
+                    <optgroup key={group.id} label={group.name}>
+                      {group.nodes.map((node) => (
+                        <option
+                          key={node._id}
+                          value={node._id}
+                          disabled={node._id === startNodeId}
+                        >
+                          {node.name}
+                        </option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
               </label>
