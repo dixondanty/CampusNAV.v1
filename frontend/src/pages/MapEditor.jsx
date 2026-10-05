@@ -20,6 +20,9 @@ function MapEditor() {
   const [allTestNodes, setAllTestNodes] = useState([])
   const [connections, setConnections] = useState([])
   const [selectedNodeId, setSelectedNodeId] = useState('')
+  const [editingRoomName, setEditingRoomName] = useState(false)
+  const [roomNameDraft, setRoomNameDraft] = useState('')
+  const [savingRoomName, setSavingRoomName] = useState(false)
   const [connectionNodeIds, setConnectionNodeIds] = useState([])
   const [roomName, setRoomName] = useState('')
   const [roomPosition, setRoomPosition] = useState(null)
@@ -525,11 +528,53 @@ function MapEditor() {
     }
   }
 
+  async function handleRenameRoom(event) {
+    event.preventDefault()
+    const updatedName = roomNameDraft.trim()
+    if (!selectedNode || selectedNode.type !== 'room' || !updatedName) {
+      setError('Room name cannot be empty.')
+      return
+    }
+
+    setError('')
+    setSavingRoomName(true)
+    try {
+      const response = await fetch(`${API_URL}/nodes/${selectedNode._id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: updatedName }),
+      })
+      const updatedNode = await readResponse(response)
+      setNodes((currentNodes) => currentNodes.map((node) =>
+        node._id === updatedNode._id ? { ...node, name: updatedNode.name } : node,
+      ))
+      setAllTestNodes((currentNodes) => currentNodes.map((node) =>
+        node._id === updatedNode._id ? { ...node, name: updatedNode.name } : node,
+      ))
+      setConnections((currentConnections) => currentConnections.map((connection) => ({
+        ...connection,
+        from: connection.from?._id === updatedNode._id
+          ? { ...connection.from, name: updatedNode.name }
+          : connection.from,
+        to: connection.to?._id === updatedNode._id
+          ? { ...connection.to, name: updatedNode.name }
+          : connection.to,
+      })))
+      setRoomNameDraft(updatedNode.name)
+      setEditingRoomName(false)
+    } catch (renameError) {
+      setError(renameError.message)
+    } finally {
+      setSavingRoomName(false)
+    }
+  }
+
   async function handleChooseNode(node) {
     if (savingConnection) {
       return
     }
 
+    setEditingRoomName(false)
     setSelectedNodeId(nodes.some((item) => item._id === node._id) ? node._id : '')
     if (mode !== 'connect') {
       return
@@ -1381,7 +1426,53 @@ function MapEditor() {
               <p className="inspector-label">
                 {selectedNode.type === 'room' ? 'Selected Room' : selectedNode.type === 'stair' ? 'Selected Stair' : 'Selected Node'}
               </p>
-              <strong className="selected-node-name">{selectedNode.name}</strong>
+              {selectedNode.type === 'room' && editingRoomName ? (
+                <form className="room-rename-form" onSubmit={handleRenameRoom}>
+                  <input
+                    aria-label="Room name"
+                    autoFocus
+                    onChange={(event) => setRoomNameDraft(event.target.value)}
+                    value={roomNameDraft}
+                  />
+                  <div className="room-rename-actions">
+                    <button
+                      className="room-rename-save"
+                      disabled={savingRoomName || !roomNameDraft.trim()}
+                      type="submit"
+                    >
+                      {savingRoomName ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                      className="room-rename-cancel"
+                      disabled={savingRoomName}
+                      onClick={() => {
+                        setRoomNameDraft(selectedNode.name)
+                        setEditingRoomName(false)
+                      }}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <>
+                  <strong className="selected-node-name">{selectedNode.name}</strong>
+                  {selectedNode.type === 'room' && (
+                    <button
+                      className="room-rename-edit"
+                      onClick={() => {
+                        setRoomNameDraft(selectedNode.name)
+                        setError('')
+                        setEditingRoomName(true)
+                      }}
+                      type="button"
+                    >
+                      Edit Name
+                    </button>
+                  )}
+                </>
+              )}
               <p className="inspector-label node-type-label">Type</p>
               <span className="node-type-value">
                 {selectedNode.type === 'room' ? 'Room' : selectedNode.type === 'stair' ? 'Stair' : 'Navigation Node'}
