@@ -60,6 +60,21 @@ router.post('/', async (req, res) => {
   res.status(201).json(node)
 })
 
+router.patch('/:id', async (req, res) => {
+  if (typeof req.body.name !== 'string' || !req.body.name.trim()) {
+    return res.status(400).json({ message: 'Node name cannot be empty.' })
+  }
+
+  const node = await Node.findById(req.params.id)
+  if (!node) {
+    return res.status(404).json({ message: 'Node not found.' })
+  }
+
+  node.name = req.body.name.trim()
+  await node.save()
+  res.json(node)
+})
+
 router.delete('/:id', async (req, res) => {
   const node = await Node.findById(req.params.id)
   if (!node) {
