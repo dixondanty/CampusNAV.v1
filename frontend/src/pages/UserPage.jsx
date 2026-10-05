@@ -12,6 +12,20 @@ async function readResponse(response) {
   return data
 }
 
+let roomsBootstrapRequest
+
+function loadRoomsBootstrap() {
+  if (!roomsBootstrapRequest) {
+    roomsBootstrapRequest = fetch(`${API_URL}/navigation/bootstrap`)
+      .then(readResponse)
+      .finally(() => {
+        roomsBootstrapRequest = null
+      })
+  }
+
+  return roomsBootstrapRequest
+}
+
 function UserPage() {
   const [rooms, setRooms] = useState([])
   const [floors, setFloors] = useState([])
@@ -30,26 +44,11 @@ function UserPage() {
 
     async function loadRooms() {
       try {
-        const floorList = await readResponse(await fetch(`${API_URL}/floors`))
-        const nodeLists = await Promise.all(
-          floorList.map(async (floor) => {
-            const floorNodes = await readResponse(
-              await fetch(`${API_URL}/nodes/${floor._id}`),
-            )
-            return floorNodes
-              .filter((node) => node.type === 'room')
-              .map((node) => ({
-                ...node,
-                floorId: String(floor._id),
-                floorName: floor.name,
-                floorNumber: floor.floorNumber,
-              }))
-          }),
-        )
+        const bootstrap = await loadRoomsBootstrap()
 
         if (active) {
-          setFloors(floorList)
-          setRooms(nodeLists.flat())
+          setFloors(bootstrap.floors)
+          setRooms(bootstrap.rooms)
         }
       } catch (loadError) {
         if (active) {

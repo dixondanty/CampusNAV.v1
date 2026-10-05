@@ -12,6 +12,8 @@ const floorsRoute = require('./routes/floors')
 const healthRoute = require('./routes/health')
 const navigationRoute = require('./routes/navigation')
 const nodesRoute = require('./routes/nodes')
+const Floor = require('./models/Floor')
+const Node = require('./models/Node')
 
 const app = express()
 const port = process.env.PORT || 5000
@@ -23,6 +25,33 @@ app.use('/api/health', healthRoute)
 app.use('/api/floors', floorsRoute)
 app.use('/api/nodes', nodesRoute)
 app.use('/api/connections', connectionsRoute)
+app.get('/api/navigation/bootstrap', async (req, res) => {
+  try {
+    const [floors, roomNodes] = await Promise.all([
+      Floor.find().sort({ floorNumber: 1 }),
+      Node.find({ type: 'room' }),
+    ])
+    const floorById = new Map(floors.map((floor) => [String(floor._id), floor]))
+    const rooms = roomNodes.flatMap((node) => {
+      const floor = floorById.get(String(node.floorId))
+      if (!floor) {
+        return []
+      }
+
+      return [{
+        ...node.toObject(),
+        floorId: String(floor._id),
+        floorName: floor.name,
+        floorNumber: floor.floorNumber,
+      }]
+    })
+
+    res.json({ floors, rooms })
+  } catch (error) {
+    console.error('Navigation bootstrap failed:', error.message)
+    res.status(500).json({ message: 'Could not load navigation data.' })
+  }
+})
 app.use('/api/navigation', navigationRoute)
 
 if (!process.env.MONGODB_URI) {
