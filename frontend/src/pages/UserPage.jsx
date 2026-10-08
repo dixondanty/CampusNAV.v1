@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
@@ -208,54 +209,32 @@ function UserPage() {
           <form onSubmit={handleNavigate}>
             <label className="user-navigation-field">
               Starting Point
-              <select
-                onChange={(event) => {
-                  setStartNodeId(event.target.value)
+              <SearchableLocationSelect
+                ariaLabel="Search starting point"
+                excludedValue={endNodeId}
+                groups={roomGroups}
+                onChange={(nodeId) => {
+                  setStartNodeId(nodeId)
                   clearRoute()
                 }}
+                placeholder="Search room or location..."
                 value={startNodeId}
-              >
-                <option value="">Select a starting point</option>
-                {roomGroups.map((group) => (
-                  <optgroup key={group.id} label={group.name}>
-                    {group.nodes.map((room) => (
-                      <option
-                        key={room._id}
-                        value={room._id}
-                        disabled={room._id === endNodeId}
-                      >
-                        {room.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
+              />
             </label>
 
             <label className="user-navigation-field">
               Destination
-              <select
-                onChange={(event) => {
-                  setEndNodeId(event.target.value)
+              <SearchableLocationSelect
+                ariaLabel="Search destination point"
+                excludedValue={startNodeId}
+                groups={roomGroups}
+                onChange={(nodeId) => {
+                  setEndNodeId(nodeId)
                   clearRoute()
                 }}
+                placeholder="Search room or location..."
                 value={endNodeId}
-              >
-                <option value="">Select a destination</option>
-                {roomGroups.map((group) => (
-                  <optgroup key={group.id} label={group.name}>
-                    {group.nodes.map((room) => (
-                      <option
-                        key={room._id}
-                        value={room._id}
-                        disabled={room._id === startNodeId}
-                      >
-                        {room.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
+              />
             </label>
 
             {startNodeId && startNodeId === endNodeId && (

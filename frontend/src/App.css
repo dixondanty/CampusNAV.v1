@@ -751,7 +751,8 @@ button:hover {
   font-weight: 600;
 }
 
-.test-navigation-field select {
+.test-navigation-field select,
+.test-navigation-field .searchable-location-input {
   width: 100%;
   min-width: 0;
   padding: 7px 8px;
@@ -760,6 +761,133 @@ button:hover {
   background: #ffffff;
   color: #354651;
   font: inherit;
+  font-weight: 400;
+}
+
+.searchable-location {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  color: #354651;
+}
+
+.searchable-location-input-wrap {
+  position: relative;
+}
+
+.searchable-location-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 34px 10px 11px;
+  border: 1px solid #cbd6df;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #263b4e;
+  font: inherit;
+  font-weight: 400;
+}
+
+.searchable-location-input:focus {
+  border-color: #176b87;
+  outline: 2px solid rgb(23 107 135 / 14%);
+}
+
+.test-navigation-field .searchable-location-input {
+  padding: 7px 30px 7px 8px;
+  border-color: #d7dfe5;
+  border-radius: 3px;
+  color: #354651;
+  font-size: 0.72rem;
+}
+
+.searchable-location-clear {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border-radius: 3px;
+  background: transparent;
+  color: #71808a;
+  font-size: 1.05rem;
+  font-weight: 400;
+  transform: translateY(-50%);
+}
+
+.searchable-location-clear:hover {
+  background: #edf2f4;
+  color: #344b59;
+}
+
+.searchable-location-options {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  max-height: min(300px, 55vh);
+  overflow: auto;
+  border: 1px solid #d7dfe5;
+  border-radius: 5px;
+  background: #ffffff;
+  box-shadow: 0 8px 20px rgb(22 48 72 / 14%);
+  color: #354651;
+}
+
+.searchable-location-group + .searchable-location-group {
+  border-top: 1px solid #e7ecef;
+}
+
+.searchable-location-group-name {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 6px 9px;
+  background: #f5f8f9;
+  color: #687985;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.searchable-location-option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 0;
+  background: #ffffff;
+  color: #354651;
+  font-size: 0.76rem;
+  font-weight: 500;
+  text-align: left;
+}
+
+.searchable-location-option:hover,
+.searchable-location-option.is-active {
+  background: #eaf3f6;
+  color: #145970;
+}
+
+.searchable-location-option small {
+  flex: 0 0 auto;
+  color: #71808a;
+  font-size: 0.64rem;
+  font-weight: 400;
+}
+
+.searchable-location-empty {
+  margin: 0;
+  padding: 12px 10px;
+  color: #687985;
+  font-size: 0.75rem;
   font-weight: 400;
 }
 
@@ -859,6 +987,68 @@ button:hover {
   margin: 0 0 12px;
   color: #263945;
   font-size: 0.9rem;
+}
+
+.room-rename-edit {
+  margin: -5px 0 12px;
+  padding: 5px 8px;
+  border: 1px solid var(--editor-border);
+  background: #ffffff;
+  color: #344b59;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.room-rename-edit:hover,
+.room-rename-cancel:hover {
+  background: #f4f6f7;
+}
+
+.room-rename-form {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 12px;
+}
+
+.room-rename-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #cbd3d9;
+  border-radius: 4px;
+  color: #263b4e;
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+.room-rename-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.room-rename-actions button {
+  padding: 5px 8px;
+  border: 1px solid var(--editor-border);
+  border-radius: 3px;
+  font-size: 0.68rem;
+}
+
+.room-rename-save {
+  background: var(--editor-accent);
+}
+
+.room-rename-save:hover:not(:disabled) {
+  background: #10566e;
+}
+
+.room-rename-cancel {
+  background: #ffffff;
+  color: #4b5a65;
+}
+
+.room-rename-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .node-type-label {
@@ -999,23 +1189,6 @@ button:hover {
   color: #344b5d;
   font-size: 0.8rem;
   font-weight: 600;
-}
-
-.user-navigation-field select {
-  width: 100%;
-  min-width: 0;
-  padding: 10px 11px;
-  border: 1px solid #cbd6df;
-  border-radius: 5px;
-  background: #ffffff;
-  color: #263b4e;
-  font: inherit;
-  font-weight: 400;
-}
-
-.user-navigation-field select:focus {
-  border-color: #176b87;
-  outline: 2px solid rgb(23 107 135 / 14%);
 }
 
 .user-navigate-button {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
@@ -1121,53 +1122,31 @@ function MapEditor() {
               <p className="inspector-label">Test Navigation</p>
               <label className="test-navigation-field">
                 Start
-                <select
-                  onChange={(event) => {
-                    setStartNodeId(event.target.value)
+                <SearchableLocationSelect
+                  ariaLabel="Search test starting point"
+                  excludedValue={endNodeId}
+                  groups={testNodeGroups}
+                  onChange={(nodeId) => {
+                    setStartNodeId(nodeId)
                     clearRoute()
                   }}
+                  placeholder="Search room or location..."
                   value={startNodeId}
-                >
-                  <option value="">Select starting point</option>
-                  {testNodeGroups.map((group) => (
-                    <optgroup key={group.id} label={group.name}>
-                      {group.nodes.map((node) => (
-                        <option
-                          key={node._id}
-                          value={node._id}
-                          disabled={node._id === endNodeId}
-                        >
-                          {node.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
+                />
               </label>
               <label className="test-navigation-field">
                 Destination
-                <select
-                  onChange={(event) => {
-                    setEndNodeId(event.target.value)
+                <SearchableLocationSelect
+                  ariaLabel="Search test destination point"
+                  excludedValue={startNodeId}
+                  groups={testNodeGroups}
+                  onChange={(nodeId) => {
+                    setEndNodeId(nodeId)
                     clearRoute()
                   }}
+                  placeholder="Search room or location..."
                   value={endNodeId}
-                >
-                  <option value="">Select destination</option>
-                  {testNodeGroups.map((group) => (
-                    <optgroup key={group.id} label={group.name}>
-                      {group.nodes.map((node) => (
-                        <option
-                          key={node._id}
-                          value={node._id}
-                          disabled={node._id === startNodeId}
-                        >
-                          {node.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
+                />
               </label>
               <div className="test-navigation-actions">
                 <button
