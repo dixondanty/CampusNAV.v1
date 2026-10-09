@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const API_URL = `${SERVER_URL}/api`
+const PROTECTED_BUILDING_ID = '6ac7e6d91280162920d68aa7'
 
 async function readResponse(response) {
   const data = await response.json()
@@ -15,7 +16,19 @@ async function readResponse(response) {
 }
 
 function MapEditor() {
-  const [floors, setFloors] = useState([])
+  const [floorRecords, setFloorRecords] = useState([])
+  const [buildings, setBuildings] = useState([])
+  const [selectedBuildingId, setSelectedBuildingId] = useState('')
+  const [loadingBuildings, setLoadingBuildings] = useState(true)
+  const [addingBuilding, setAddingBuilding] = useState(false)
+  const [editingBuilding, setEditingBuilding] = useState(false)
+  const [confirmingBuildingDelete, setConfirmingBuildingDelete] = useState(false)
+  const [buildingName, setBuildingName] = useState('')
+  const [buildingDescription, setBuildingDescription] = useState('')
+  const [savingBuilding, setSavingBuilding] = useState(false)
+  const [deletingBuilding, setDeletingBuilding] = useState(false)
+  const [modalError, setModalError] = useState('')
+  const [successMessage, setSuccessMessage] = useState('')
   const [selectedFloorId, setSelectedFloorId] = useState('')
   const [nodes, setNodes] = useState([])
   const [allStairNodes, setAllStairNodes] = useState([])
@@ -55,6 +68,14 @@ function MapEditor() {
   const navigate = useNavigate()
   const mapImageRef = useRef(null)
   const creatingNodeRef = useRef(false)
+  const floors = useMemo(
+    () => floorRecords.filter((floor) =>
+      floor.context === 'building' &&
+      String(floor.buildingId?._id || floor.buildingId) === selectedBuildingId,
+    ),
+    [floorRecords, selectedBuildingId],
+  )
+  const selectedBuilding = buildings.find((building) => building._id === selectedBuildingId)
   const selectedFloor = floors.find((floor) => floor._id === selectedFloorId)
   const selectedNode = nodes.find((node) => node._id === selectedNodeId)
   const navigationNodes = nodes.filter((node) => node.type === 'nav')
@@ -155,8 +176,15 @@ function MapEditor() {
   async function refreshFloors() {
     const response = await fetch(`${API_URL}/floors`)
     const floorList = await readResponse(response)
-    setFloors(floorList)
+    setFloorRecords(floorList)
     return floorList
+  }
+
+  async function refreshBuildings() {
+    const response = await fetch(`${API_URL}/buildings`)
+    const buildingList = await readResponse(response)
+    setBuildings(buildingList)
+    return buildingList
   }
 
   async function refreshNodes(floorId) {
@@ -186,20 +214,35 @@ function MapEditor() {
   }
 
   useEffect(() => {
-    async function loadFloors() {
+    async function loadEditorData() {
       try {
-        const floorList = await refreshFloors()
-        if (floorList.length > 0) {
-          setSelectedFloorId(floorList[0]._id)
+        const [floorList, buildingList] = await Promise.all([
+          refreshFloors(),
+          refreshBuildings(),
+        ])
+        const firstBuilding = buildingList.find((building) =>
+          floorList.some((floor) =>
+            floor.context === 'building' &&
+            String(floor.buildingId?._id || floor.buildingId) === building._id,
+          ),
+        ) || buildingList[0]
+        if (firstBuilding) {
+          setSelectedBuildingId(firstBuilding._id)
+          const firstFloor = floorList.find((floor) =>
+            floor.context === 'building' &&
+            String(floor.buildingId?._id || floor.buildingId) === firstBuilding._id,
+          )
+          setSelectedFloorId(firstFloor?._id || '')
         }
       } catch (loadError) {
         setError(loadError.message)
       } finally {
         setLoading(false)
+        setLoadingBuildings(false)
       }
     }
 
-    loadFloors()
+    loadEditorData()
   }, [])
 
   useEffect(() => {
@@ -281,11 +324,19 @@ function MapEditor() {
   async function handleSubmit(event) {
     event.preventDefault()
     setError('')
+    setModalError('')
+    setSuccessMessage('')
+    if (!selectedBuildingId) {
+      setError('Select a building before adding a floor.')
+      return
+    }
     setSaving(true)
 
     const formData = new FormData()
     formData.append('name', name)
     formData.append('floorNumber', floorNumber)
+    formData.append('context', 'building')
+    formData.append('buildingId', selectedBuildingId)
     if (mapImage) {
       formData.append('mapImage', mapImage)
     }
@@ -297,7 +348,10 @@ function MapEditor() {
       })
       const newFloor = await readResponse(response)
       const floorList = await refreshFloors()
-      if (floorList.some((floor) => floor._id === newFloor._id)) {
+      if (
+        String(newFloor.buildingId?._id || newFloor.buildingId) === selectedBuildingId &&
+        floorList.some((floor) => floor._id === newFloor._id)
+      ) {
         setLoadingNodes(true)
         setNodes([])
         setConnections([])
@@ -305,6 +359,7 @@ function MapEditor() {
         setConnectionNodeIds([])
         setSelectedFloorId(newFloor._id)
       }
+      setSuccessMessage(`Floor "${newFloor.name}" added to ${selectedBuilding?.name || 'the selected building'}.`)
       setMode('select')
       clearRoute()
       setName('')
@@ -313,10 +368,183 @@ function MapEditor() {
       setAddingFloor(false)
       event.target.reset()
     } catch (saveError) {
-      setError(saveError.message)
+      setModalError(saveError.message)
     } finally {
       setSaving(false)
     }
+  }
+
+  async function handleSaveBuilding(event) {
+    event.preventDefault()
+    setError('')
+    setModalError('')
+    setSuccessMessage('')
+    setSavingBuilding(true)
+
+    try {
+      const isEditing = Boolean(editingBuilding)
+      const response = await fetch(
+        isEditing
+          ? `${API_URL}/buildings/${selectedBuildingId}`
+          : `${API_URL}/buildings`,
+        {
+          method: isEditing ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: buildingName.trim(),
+            description: buildingDescription.trim(),
+          }),
+        },
+      )
+      const savedBuilding = await readResponse(response)
+      const buildingList = await refreshBuildings()
+      if (!buildingList.some((building) => building._id === savedBuilding._id)) {
+        throw new Error('The building was saved, but could not be loaded into the editor.')
+      }
+      setSelectedBuildingId(savedBuilding._id)
+      if (!isEditing) {
+        setSelectedFloorId('')
+        setNodes([])
+        setConnections([])
+        setSelectedNodeId('')
+        setConnectionNodeIds([])
+        setAllStairNodes([])
+        setAllTestNodes([])
+        setStartNodeId('')
+        setEndNodeId('')
+        setStairPosition(null)
+        setStairPart('')
+        setCrossFloorFromId('')
+        setCrossFloorToId('')
+        setCrossFloorConnectionMessage('')
+        setMode('select')
+        clearRoute()
+      }
+      setAddingBuilding(false)
+      setEditingBuilding(false)
+      setBuildingName('')
+      setBuildingDescription('')
+      setSuccessMessage(
+        isEditing
+          ? `Building "${savedBuilding.name}" updated.`
+          : `Building "${savedBuilding.name}" created.`,
+      )
+    } catch (buildingError) {
+      setModalError(buildingError.message)
+    } finally {
+      setSavingBuilding(false)
+    }
+  }
+
+  function handleStartEditingBuilding() {
+    if (!selectedBuilding) {
+      return
+    }
+
+    setError('')
+    setModalError('')
+    setBuildingName(selectedBuilding.name)
+    setBuildingDescription(selectedBuilding.description || '')
+    setEditingBuilding(true)
+  }
+
+  async function handleDeleteBuilding() {
+    if (!selectedBuilding || deletingBuilding) {
+      return
+    }
+
+    setModalError('')
+    setDeletingBuilding(true)
+    try {
+      const response = await fetch(`${API_URL}/buildings/${selectedBuilding._id}`, {
+        method: 'DELETE',
+      })
+      await readResponse(response)
+      const buildingList = await refreshBuildings()
+      const nextBuilding = buildingList[0]
+      const nextFloor = floorRecords.find((floor) =>
+        floor.context === 'building' &&
+        String(floor.buildingId?._id || floor.buildingId) === nextBuilding?._id,
+      )
+
+      setSelectedBuildingId(nextBuilding?._id || '')
+      setSelectedFloorId(nextFloor?._id || '')
+      setNodes([])
+      setConnections([])
+      setSelectedNodeId('')
+      setConnectionNodeIds([])
+      setAllStairNodes([])
+      setAllTestNodes([])
+      setEditingRoomName(false)
+      setRoomNameDraft('')
+      setRoomPosition(null)
+      setStairPosition(null)
+      setStairGroup('')
+      setStairPart('')
+      setCrossFloorFromId('')
+      setCrossFloorToId('')
+      setCrossFloorConnectionMessage('')
+      setStartNodeId('')
+      setEndNodeId('')
+      setLoadingNodes(Boolean(nextFloor))
+      setMode('select')
+      clearRoute()
+      setConfirmingBuildingDelete(false)
+      setSuccessMessage(`Building "${selectedBuilding.name}" deleted.`)
+    } catch (deleteError) {
+      setModalError(deleteError.message)
+    } finally {
+      setDeletingBuilding(false)
+    }
+  }
+
+  function handleStartCreatingBuilding() {
+    setError('')
+    setModalError('')
+    setBuildingName('')
+    setBuildingDescription('')
+    setAddingBuilding(true)
+  }
+
+  function handleConfirmDeleteBuilding() {
+    if (selectedBuilding?._id === PROTECTED_BUILDING_ID) {
+      setModalError('Main Building cannot be deleted.')
+      return
+    }
+
+    setModalError('')
+    setConfirmingBuildingDelete(true)
+  }
+
+  function handleSelectBuilding(buildingId) {
+    if (buildingId === selectedBuildingId) {
+      return
+    }
+
+    const firstFloor = floorRecords.find((floor) =>
+      floor.context === 'building' &&
+      String(floor.buildingId?._id || floor.buildingId) === buildingId,
+    )
+    setSelectedBuildingId(buildingId)
+    setSelectedFloorId(firstFloor?._id || '')
+    setNodes([])
+    setConnections([])
+    setSelectedNodeId('')
+    setConnectionNodeIds([])
+    setAllStairNodes([])
+    setAllTestNodes([])
+    setStartNodeId('')
+    setEndNodeId('')
+    setLoadingNodes(Boolean(firstFloor))
+    setStairPosition(null)
+    setStairPart('')
+    setCrossFloorFromId('')
+    setCrossFloorToId('')
+    setCrossFloorConnectionMessage('')
+    setMode('select')
+    setError('')
+    setSuccessMessage('')
+    clearRoute()
   }
 
   async function handleDeleteFloor(floor) {
@@ -330,18 +558,25 @@ function MapEditor() {
         method: 'DELETE',
       })
       await readResponse(response)
-      await refreshFloors()
+      const floorList = await refreshFloors()
+      const nextFloor = floorList.find((item) =>
+        item.context === 'building' &&
+        String(item.buildingId?._id || item.buildingId) === selectedBuildingId &&
+        item._id !== floor._id,
+      )
       setAllStairNodes((currentNodes) =>
         currentNodes.filter((node) => String(node.floorId) !== floor._id),
       )
       if (selectedFloorId === floor._id) {
-        setSelectedFloorId('')
+        setSelectedFloorId(nextFloor?._id || '')
         setNodes([])
         setConnections([])
         setSelectedNodeId('')
         setConnectionNodeIds([])
-        setLoadingNodes(false)
+        setLoadingNodes(Boolean(nextFloor))
         setMode('select')
+        setStartNodeId('')
+        setEndNodeId('')
       }
       clearRoute()
     } catch (deleteError) {
@@ -840,6 +1075,70 @@ function MapEditor() {
 
       <div className="map-editor-layout">
         <aside className="editor-sidebar floor-sidebar">
+          <section className="building-management">
+            <label className="building-selector-label" htmlFor="building-selector">
+              Building
+            </label>
+            {loadingBuildings ? (
+              <p className="sidebar-message">Loading buildings…</p>
+            ) : buildings.length === 0 ? (
+              <p className="sidebar-message">No buildings yet. Create one to manage its floors.</p>
+            ) : (
+              <select
+                className="building-selector"
+                disabled={savingBuilding || deletingBuilding}
+                id="building-selector"
+                onChange={(event) => handleSelectBuilding(event.target.value)}
+                value={selectedBuildingId}
+              >
+                {buildings.map((building) => (
+                  <option key={building._id} value={building._id}>
+                    {building.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {selectedBuilding && (
+              <div className="building-actions">
+                <button
+                  className="building-action-button"
+                  disabled={savingBuilding || deletingBuilding}
+                  onClick={handleStartEditingBuilding}
+                  type="button"
+                >
+                  Rename
+                </button>
+                <button
+                  className="building-action-button building-delete-button"
+                  disabled={
+                    savingBuilding ||
+                    deletingBuilding ||
+                    selectedBuilding._id === PROTECTED_BUILDING_ID
+                  }
+                  onClick={handleConfirmDeleteBuilding}
+                  type="button"
+                  title={
+                    selectedBuilding._id === PROTECTED_BUILDING_ID
+                      ? 'Main Building is protected'
+                      : 'Delete this empty building'
+                  }
+                >
+                  Delete
+                </button>
+              </div>
+            )}
+            <button
+              className="building-add-button"
+              disabled={loadingBuildings || savingBuilding || deletingBuilding}
+              onClick={handleStartCreatingBuilding}
+              type="button"
+            >
+              <span aria-hidden="true">+</span> Add Building
+            </button>
+          </section>
+          {successMessage && (
+            <p className="sidebar-success" role="status">{successMessage}</p>
+          )}
           <div className="sidebar-heading">
             <span>Floors</span>
             <span className="floor-count">{floors.length}</span>
@@ -847,7 +1146,9 @@ function MapEditor() {
           {loading ? (
             <p className="sidebar-message">Loading floors…</p>
           ) : floors.length === 0 ? (
-            <p className="sidebar-message">No floors yet.</p>
+            <p className="sidebar-message">
+              {selectedBuilding ? 'No floors in this building yet.' : 'Select or create a building to manage its floors.'}
+            </p>
           ) : (
             <ul className="floor-list">
               {floors.map((floor) => (
@@ -879,8 +1180,11 @@ function MapEditor() {
           )}
           <button
             className="add-floor-button"
+            disabled={!selectedBuildingId || loadingBuildings || savingBuilding || deletingBuilding}
             onClick={() => {
               setError('')
+              setModalError('')
+              setSuccessMessage('')
               setAddingFloor(true)
             }}
             type="button"
@@ -1513,6 +1817,9 @@ function MapEditor() {
               <div>
                 <p className="workspace-kicker">FLOOR SETTINGS</p>
                 <h2 id="add-floor-title">Add Floor</h2>
+                {selectedBuilding && (
+                  <p className="modal-context">{selectedBuilding.name}</p>
+                )}
               </div>
               <button
                 aria-label="Close"
@@ -1525,6 +1832,9 @@ function MapEditor() {
               </button>
             </div>
             <form className="floor-form" onSubmit={handleSubmit}>
+              {modalError && (
+                <p className="form-error" role="alert">{modalError}</p>
+              )}
               <label>
                 Floor name
                 <input
@@ -1565,6 +1875,154 @@ function MapEditor() {
                 </button>
               </div>
             </form>
+          </section>
+        </div>
+      )}
+      {(addingBuilding || editingBuilding) && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !savingBuilding) {
+              setAddingBuilding(false)
+              setEditingBuilding(false)
+            }
+          }}
+        >
+          <section
+            aria-labelledby="add-building-title"
+            aria-modal="true"
+            className="floor-modal"
+            role="dialog"
+          >
+            <div className="modal-heading">
+              <div>
+                <p className="workspace-kicker">BUILDING MANAGEMENT</p>
+                <h2 id="add-building-title">
+                  {editingBuilding ? 'Rename Building' : 'Add Building'}
+                </h2>
+              </div>
+              <button
+                aria-label="Close"
+                className="modal-close"
+                disabled={savingBuilding}
+                onClick={() => {
+                  setAddingBuilding(false)
+                  setEditingBuilding(false)
+                }}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="floor-form" onSubmit={handleSaveBuilding}>
+              {modalError && (
+                <p className="form-error" role="alert">{modalError}</p>
+              )}
+              <label>
+                Building name
+                <input
+                  autoFocus
+                  onChange={(event) => setBuildingName(event.target.value)}
+                  required
+                  value={buildingName}
+                />
+              </label>
+              <label>
+                Description <span className="optional-label">(optional)</span>
+                <textarea
+                  onChange={(event) => setBuildingDescription(event.target.value)}
+                  rows="3"
+                  value={buildingDescription}
+                />
+              </label>
+              <div className="modal-actions">
+                <button
+                  className="modal-cancel"
+                  disabled={savingBuilding}
+                  onClick={() => {
+                    setAddingBuilding(false)
+                    setEditingBuilding(false)
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button disabled={savingBuilding || !buildingName.trim()} type="submit">
+                  {savingBuilding
+                    ? 'Saving…'
+                    : editingBuilding
+                      ? 'Save Changes'
+                      : 'Create Building'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+      {confirmingBuildingDelete && selectedBuilding && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deletingBuilding) {
+              setConfirmingBuildingDelete(false)
+              setModalError('')
+            }
+          }}
+        >
+          <section
+            aria-labelledby="delete-building-title"
+            aria-modal="true"
+            className="floor-modal"
+            role="dialog"
+          >
+            <div className="modal-heading">
+              <div>
+                <p className="workspace-kicker">BUILDING MANAGEMENT</p>
+                <h2 id="delete-building-title">Delete Building</h2>
+              </div>
+              <button
+                aria-label="Close"
+                className="modal-close"
+                disabled={deletingBuilding}
+                onClick={() => {
+                  setConfirmingBuildingDelete(false)
+                  setModalError('')
+                }}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <div className="building-delete-confirmation">
+              <p>
+                Delete <strong>{selectedBuilding.name}</strong>?
+              </p>
+              <p>This action is permanent. Buildings with floors, nodes, or connections cannot be deleted.</p>
+              {modalError && (
+                <p className="form-error" role="alert">{modalError}</p>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-cancel"
+                disabled={deletingBuilding}
+                onClick={() => {
+                  setConfirmingBuildingDelete(false)
+                  setModalError('')
+                }}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="building-confirm-delete"
+                disabled={deletingBuilding || selectedBuilding._id === PROTECTED_BUILDING_ID}
+                onClick={handleDeleteBuilding}
+                type="button"
+              >
+                {deletingBuilding ? 'Deleting…' : 'Delete Building'}
+              </button>
+            </div>
           </section>
         </div>
       )}

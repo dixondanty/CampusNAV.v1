@@ -6,6 +6,15 @@ const floorSchema = new mongoose.Schema({
     required: true,
     trim: true,
   },
+  context: {
+    type: String,
+    enum: ['building', 'campus'],
+    default: 'building',
+  },
+  buildingId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Building',
+  },
   floorNumber: {
     type: Number,
     required: true,
