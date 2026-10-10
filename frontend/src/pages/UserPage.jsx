@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx'
+import buildRouteSegments from '../utils/buildRouteSegments.js'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
@@ -31,10 +32,12 @@ function loadRoomsBootstrap() {
 function UserPage() {
   const [rooms, setRooms] = useState([])
   const [floors, setFloors] = useState([])
+  const [buildings, setBuildings] = useState([])
   const [selectedDisplayFloorId, setSelectedDisplayFloorId] = useState('')
   const [startNodeId, setStartNodeId] = useState('')
   const [endNodeId, setEndNodeId] = useState('')
   const [route, setRoute] = useState(null)
+  const [activeRouteSegmentIndex, setActiveRouteSegmentIndex] = useState(0)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -46,11 +49,15 @@ function UserPage() {
 
     async function loadRooms() {
       try {
-        const bootstrap = await loadRoomsBootstrap()
+        const [bootstrap, buildingList] = await Promise.all([
+          loadRoomsBootstrap(),
+          fetch(`${API_URL}/buildings`).then(readResponse),
+        ])
 
         if (active) {
           setFloors(bootstrap.floors)
           setRooms(bootstrap.rooms)
+          setBuildings(buildingList)
         }
       } catch (loadError) {
         if (active) {
@@ -73,6 +80,11 @@ function UserPage() {
     () => new Map(floors.map((floor) => [String(floor._id), floor])),
     [floors],
   )
+  const buildingNameById = useMemo(() => {
+    const byId = new Map()
+    buildings.forEach((building) => byId.set(building._id, building.name))
+    return byId
+  }, [buildings])
   const displayFloors = [...floors].sort(
     (first, second) => Number(first.floorNumber) - Number(second.floorNumber),
   )
@@ -81,6 +93,40 @@ function UserPage() {
     (floor) => String(floor._id) === selectedDisplayFloorId,
   ) || displayFloors[0] || null
   const routeNodes = route?.path || []
+
+  function getNodeFloorId(node) {
+    const floorId = node?.floorId
+    return String(floorId && typeof floorId === 'object' ? floorId._id : floorId)
+  }
+
+  function decoratePathNode(node) {
+    const floor = floorById.get(getNodeFloorId(node))
+    return {
+      ...node,
+      floorName: floor?.name,
+      floorNumber: floor?.floorNumber,
+      context: floor?.context,
+      buildingId: String((floor?.buildingId && typeof floor.buildingId === 'object'
+        ? floor.buildingId._id
+        : floor?.buildingId) || ''),
+    }
+  }
+
+  function getFloorMapLabel(floorId) {
+    const floor = floorById.get(floorId)
+    if (!floor) {
+      return null
+    }
+    const buildingId = String(
+      (floor.buildingId && typeof floor.buildingId === 'object'
+        ? floor.buildingId._id
+        : floor.buildingId) || '',
+    )
+    const contextLabel = floor.context === 'campus'
+      ? 'Campus'
+      : buildingNameById.get(buildingId) || 'Building'
+    return `${contextLabel} · ${floor.name}`
+  }
 
   const transitions = routeNodes.slice(0, -1).flatMap((node, index) => {
     const nextNode = routeNodes[index + 1]
@@ -102,6 +148,7 @@ function UserPage() {
     setRoute(null)
     setMessage('')
     setError('')
+    setActiveRouteSegmentIndex(0)
     setSelectedDisplayFloorId(displayFloors[0] ? String(displayFloors[0]._id) : '')
   }
 
@@ -128,14 +175,35 @@ function UserPage() {
         setMessage('No route found between the selected points.')
         return
       }
-      setRoute(result)
-      if (result.path?.[0]?.floorId) {
-        setSelectedDisplayFloorId(String(result.path[0].floorId))
+      const decoratedResult = {
+        ...result,
+        path: result.path.map(decoratePathNode),
+      }
+      setRoute(decoratedResult)
+      setActiveRouteSegmentIndex(0)
+      const firstFloorId = getNodeFloorId(decoratedResult.path[0])
+      if (firstFloorId && floorById.get(firstFloorId)) {
+        setSelectedDisplayFloorId(firstFloorId)
       }
     } catch (routeError) {
       setError(routeError.message)
     } finally {
       setNavigating(false)
+    }
+  }
+
+  function goToRouteSegment(index) {
+    const segment = routeGuidanceSegments[index]
+    if (!segment) {
+      return
+    }
+    const floorId = getNodeFloorId(segment.nodes[0])
+    if (floorId && floorById.get(floorId)) {
+      setActiveRouteSegmentIndex(index)
+      setSelectedDisplayFloorId(floorId)
+      setMessage('')
+    } else {
+      setMessage('A floor in this route is no longer available. Refresh the route or restore the missing floor.')
     }
   }
 
@@ -181,6 +249,34 @@ function UserPage() {
         { room: selectedEndRoom, label: 'Destination', className: 'is-destination' },
       ].filter((marker) => marker.room && marker.room.floorId === displayFloorId)
     : []
+
+  const routeGuidanceSegments = buildRouteSegments(routeNodes)
+  const activeRouteGuidanceSegment = routeGuidanceSegments[activeRouteSegmentIndex] || null
+  const activeRouteGuidanceFloorId = getNodeFloorId(activeRouteGuidanceSegment?.nodes[0] || {})
+  const activeRouteGuidanceEdges = activeRouteGuidanceSegment
+    ? activeRouteGuidanceSegment.nodes.slice(0, -1).map((fromNode, index) => {
+        const toNode = activeRouteGuidanceSegment.nodes[index + 1]
+        return {
+          key: `${fromNode._id}-${toNode._id}-segment-${activeRouteSegmentIndex}-${index}`,
+          from: fromNode,
+          to: toNode,
+        }
+      })
+    : []
+  const displayRouteSegments =
+    activeRouteGuidanceSegment && activeRouteGuidanceFloorId === displayFloorId
+      ? activeRouteGuidanceEdges
+      : displaySegments
+  const missingFloorInRoute = routeNodes.some((node) => !floorById.get(getNodeFloorId(node)))
+  const routeGuidanceCue = (() => {
+    if (!activeRouteGuidanceSegment || activeRouteSegmentIndex === 0) {
+      return ''
+    }
+    const previousSegment = routeGuidanceSegments[activeRouteSegmentIndex - 1]
+    const entryNode = previousSegment?.nodes[previousSegment.nodes.length - 1]
+    const label = getFloorMapLabel(activeRouteGuidanceFloorId) || 'the next map'
+    return entryNode ? `Continue via ${entryNode.name} → ${label}` : `Continue to ${label}`
+  })()
 
   return (
     <main className="user-navigation-page">
@@ -294,7 +390,52 @@ function UserPage() {
                   <strong>{routeFloorNames.map((floor) => floor.name).join(' → ')}</strong>
                 </div>
               </div>
+              {missingFloorInRoute && (
+                <p className="user-navigation-message">
+                  A floor in this route is no longer available. Some maps may be missing.
+                </p>
+              )}
             </div>
+          )}
+
+          {route && routeGuidanceSegments.length > 1 && (
+            <section
+              aria-label="Route map guide"
+              className="user-route-guidance"
+            >
+              <div className="user-route-guidance-step">
+                <span className="user-route-guidance-indicator">
+                  Map {activeRouteSegmentIndex + 1} of {routeGuidanceSegments.length}
+                </span>
+                <span className="user-route-guidance-map">
+                  {getFloorMapLabel(activeRouteGuidanceFloorId) || 'Unavailable floor'}
+                </span>
+                {activeRouteSegmentIndex === routeGuidanceSegments.length - 1 && (
+                  <span className="user-route-guidance-arrival">Arrived at destination</span>
+                )}
+              </div>
+              {routeGuidanceCue && (
+                <p className="user-stair-transition">{routeGuidanceCue}</p>
+              )}
+              <div className="user-route-guidance-actions">
+                <button
+                  className="user-guidance-back-button"
+                  disabled={activeRouteSegmentIndex === 0}
+                  onClick={() => goToRouteSegment(activeRouteSegmentIndex - 1)}
+                  type="button"
+                >
+                  Back
+                </button>
+                <button
+                  className="user-guidance-next-button"
+                  disabled={activeRouteSegmentIndex === routeGuidanceSegments.length - 1}
+                  onClick={() => goToRouteSegment(activeRouteSegmentIndex + 1)}
+                  type="button"
+                >
+                  Next
+                </button>
+              </div>
+            </section>
           )}
 
           {displayFloors.length > 0 && (
@@ -333,7 +474,7 @@ function UserPage() {
                           preserveAspectRatio="none"
                           viewBox="0 0 100 100"
                         >
-                          {displaySegments.map((segment) => (
+                          {displayRouteSegments.map((segment) => (
                             <line
                               key={segment.key}
                               x1={segment.from.x}

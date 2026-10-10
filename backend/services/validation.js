@@ -17,7 +17,7 @@ function normalizeBuildingConnectionFields(connectionType, connectionGroup) {
     }
   }
 
-  if (normalizedType !== 'skywalk') {
+  if (normalizedType !== 'skywalk' && normalizedType !== 'entrance') {
     return {
       connectionType: normalizedType,
       connectionGroup: normalizedGroup,
@@ -61,6 +61,26 @@ function skywalkFloorsValid(fromContext, fromBuildingId, toContext, toBuildingId
     toContext === 'building' &&
     Boolean(fromBuildingId) &&
     Boolean(toBuildingId)
+  )
+}
+
+function entranceFloorsValid(fromContext, fromBuildingId, toContext, toBuildingId) {
+  const fromCampus = fromContext === 'campus' && !fromBuildingId
+  const toCampus = toContext === 'campus' && !toBuildingId
+  const fromBuilding = fromContext === 'building' && Boolean(fromBuildingId)
+  const toBuilding = toContext === 'building' && Boolean(toBuildingId)
+
+  return (fromCampus && toBuilding) || (fromBuilding && toCampus)
+}
+
+function entranceEndpointsMatch(fromType, toType, fromConnectionGroup, toConnectionGroup) {
+  const fromGroup = typeof fromConnectionGroup === 'string' ? fromConnectionGroup.trim() : ''
+  const toGroup = typeof toConnectionGroup === 'string' ? toConnectionGroup.trim() : ''
+  return (
+    fromType === 'entrance' &&
+    toType === 'entrance' &&
+    Boolean(fromGroup) &&
+    fromGroup === toGroup
   )
 }
 
@@ -114,6 +134,8 @@ module.exports = {
   isSameFloorConnectionAllowed,
   isSkywalkEndpointPair,
   skywalkFloorsValid,
+  entranceFloorsValid,
+  entranceEndpointsMatch,
   shareSameBuildingId,
   skywalkEndpointsMatch,
   isValidCrossBuildingDistance,

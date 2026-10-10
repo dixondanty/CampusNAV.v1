@@ -21,7 +21,7 @@ function SearchableLocationSelect({
         ...group,
         nodes: group.nodes.filter((node) =>
           String(node._id) !== excludedValue &&
-          String(node.name || '').trim().toLocaleLowerCase().includes(searchText),
+          String(node.displayLabel || node.name || '').trim().toLocaleLowerCase().includes(searchText),
         ),
       }))
       .filter((group) => group.nodes.length > 0)
@@ -117,7 +117,7 @@ function SearchableLocationSelect({
           placeholder={placeholder}
           role="combobox"
           value={isOpen ? search : selectedLocation
-            ? `${selectedLocation.node.name} · ${selectedLocation.floorName}`
+            ? `${selectedLocation.node.displayLabel || selectedLocation.node.name} · ${selectedLocation.floorName}`
             : ''}
         />
         {(search || selectedLocation) && (
@@ -160,7 +160,7 @@ function SearchableLocationSelect({
                       role="option"
                       type="button"
                     >
-                      <span>{node.name}</span>
+                      <span>{node.displayLabel || node.name}</span>
                       <small>{group.name}</small>
                     </button>
                   )

@@ -54,6 +54,11 @@ router.post('/', upload.single('mapImage'), async (req, res) => {
     if (!building) {
       return res.status(404).json({ message: 'Building not found.' })
     }
+
+    const duplicateFloor = await Floor.findOne({ buildingId, floorNumber: req.body.floorNumber })
+    if (duplicateFloor) {
+      return res.status(409).json({ message: 'A floor with that number already exists in this building.' })
+    }
   }
 
   const floor = await Floor.create({

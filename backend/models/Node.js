@@ -24,7 +24,7 @@ const nodeSchema = new mongoose.Schema({
   },
   connectionType: {
     type: String,
-    enum: ['skywalk'],
+    enum: ['skywalk', 'entrance'],
     trim: true,
     required: function () {
       return this.type === 'buildingConnection'

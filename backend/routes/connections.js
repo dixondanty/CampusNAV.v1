@@ -8,6 +8,8 @@ const {
   isSameFloorConnectionAllowed,
   isSkywalkEndpointPair,
   skywalkFloorsValid,
+  entranceFloorsValid,
+  entranceEndpointsMatch,
   shareSameBuildingId,
   skywalkEndpointsMatch,
   isValidCrossBuildingDistance,
@@ -96,49 +98,86 @@ router.post('/', async (req, res) => {
         })
       }
 
-      if (!skywalkFloorsValid(fromFloor.context, fromFloor.buildingId, toFloor.context, toFloor.buildingId)) {
-        return res.status(400).json({
-          message: 'Skywalk endpoints must belong to assigned building floors.',
-        })
+      if (fromNode.connectionType === 'entrance' || toNode.connectionType === 'entrance') {
+        if (!entranceFloorsValid(fromFloor.context, fromFloor.buildingId, toFloor.context, toFloor.buildingId)) {
+          return res.status(400).json({
+            message: 'Entrance endpoints must connect a campus floor to an assigned building floor.',
+          })
+        }
+
+        const buildingFloor = fromFloor.context === 'building' ? fromFloor : toFloor
+        const building = await Building.findById(buildingFloor.buildingId)
+        if (!building) {
+          return res.status(400).json({
+            message: 'The building-side entrance floor must reference an existing building.',
+          })
+        }
+
+        if (
+          !entranceEndpointsMatch(
+            fromNode.connectionType,
+            toNode.connectionType,
+            fromNode.connectionGroup,
+            toNode.connectionGroup,
+          )
+        ) {
+          return res.status(400).json({
+            message: 'Entrance endpoints must have the same entrance type and group.',
+          })
+        }
+
+        if (!isValidCrossBuildingDistance(req.body.distance)) {
+          return res.status(400).json({
+            message: 'A finite, non-negative distance is required for entrance connections.',
+          })
+        }
+
+        distance = req.body.distance
+      } else {
+        if (!skywalkFloorsValid(fromFloor.context, fromFloor.buildingId, toFloor.context, toFloor.buildingId)) {
+          return res.status(400).json({
+            message: 'Skywalk endpoints must belong to assigned building floors.',
+          })
+        }
+
+        const [fromBuilding, toBuilding] = await Promise.all([
+          Building.findById(fromFloor.buildingId),
+          Building.findById(toFloor.buildingId),
+        ])
+
+        if (!fromBuilding || !toBuilding) {
+          return res.status(400).json({
+            message: 'Both skywalk endpoint floors must reference existing buildings.',
+          })
+        }
+
+        if (shareSameBuildingId(fromBuilding._id, toBuilding._id)) {
+          return res.status(400).json({
+            message: 'Building connections cannot connect floors in the same building.',
+          })
+        }
+
+        if (
+          !skywalkEndpointsMatch(
+            fromNode.connectionType,
+            toNode.connectionType,
+            fromNode.connectionGroup,
+            toNode.connectionGroup,
+          )
+        ) {
+          return res.status(400).json({
+            message: 'Skywalk endpoints must have the same connection type and group.',
+          })
+        }
+
+        if (!isValidCrossBuildingDistance(req.body.distance)) {
+          return res.status(400).json({
+            message: 'A finite, non-negative distance is required for cross-building connections.',
+          })
+        }
+
+        distance = req.body.distance
       }
-
-      const [fromBuilding, toBuilding] = await Promise.all([
-        Building.findById(fromFloor.buildingId),
-        Building.findById(toFloor.buildingId),
-      ])
-
-      if (!fromBuilding || !toBuilding) {
-        return res.status(400).json({
-          message: 'Both skywalk endpoint floors must reference existing buildings.',
-        })
-      }
-
-      if (shareSameBuildingId(fromBuilding._id, toBuilding._id)) {
-        return res.status(400).json({
-          message: 'Building connections cannot connect floors in the same building.',
-        })
-      }
-
-      if (
-        !skywalkEndpointsMatch(
-          fromNode.connectionType,
-          toNode.connectionType,
-          fromNode.connectionGroup,
-          toNode.connectionGroup,
-        )
-      ) {
-        return res.status(400).json({
-          message: 'Skywalk endpoints must have the same connection type and group.',
-        })
-      }
-
-      if (!isValidCrossBuildingDistance(req.body.distance)) {
-        return res.status(400).json({
-          message: 'A finite, non-negative distance is required for cross-building connections.',
-        })
-      }
-
-      distance = req.body.distance
     } else if (!fromIsStair || !toIsStair) {
       return res.status(400).json({ message: 'Only stair nodes can connect across floors.' })
     } else {

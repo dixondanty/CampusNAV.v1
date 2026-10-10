@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx'
+import buildRouteSegments from '../utils/buildRouteSegments.js'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const API_URL = `${SERVER_URL}/api`
 const PROTECTED_BUILDING_ID = '6ac7e6d91280162920d68aa7'
+const CAMPUS_SELECTION_ID = '__campus__'
 
 async function readResponse(response) {
   const data = await response.json()
@@ -44,6 +46,14 @@ function MapEditor() {
   const [stairPosition, setStairPosition] = useState(null)
   const [stairGroup, setStairGroup] = useState('')
   const [stairPart, setStairPart] = useState('')
+  const [entrancePosition, setEntrancePosition] = useState(null)
+  const [entranceName, setEntranceName] = useState('')
+  const [entranceGroup, setEntranceGroup] = useState('')
+  const [savingEntrance, setSavingEntrance] = useState(false)
+  const [remoteBuildingConnectionNodes, setRemoteBuildingConnectionNodes] = useState([])
+  const [crossMapPair, setCrossMapPair] = useState(null)
+  const [crossMapDistance, setCrossMapDistance] = useState('')
+  const [savingCrossMap, setSavingCrossMap] = useState(false)
   const [name, setName] = useState('')
   const [floorNumber, setFloorNumber] = useState('')
   const [mapImage, setMapImage] = useState(null)
@@ -61,6 +71,7 @@ function MapEditor() {
   const [endNodeId, setEndNodeId] = useState('')
   const [routeResult, setRouteResult] = useState(null)
   const [routeMessage, setRouteMessage] = useState('')
+  const [activeRouteSegmentIndex, setActiveRouteSegmentIndex] = useState(0)
   const [routing, setRouting] = useState(false)
   const [addingFloor, setAddingFloor] = useState(false)
   const [mode, setMode] = useState('select')
@@ -69,10 +80,12 @@ function MapEditor() {
   const mapImageRef = useRef(null)
   const creatingNodeRef = useRef(false)
   const floors = useMemo(
-    () => floorRecords.filter((floor) =>
-      floor.context === 'building' &&
-      String(floor.buildingId?._id || floor.buildingId) === selectedBuildingId,
-    ),
+    () => floorRecords.filter((floor) => (
+      selectedBuildingId === CAMPUS_SELECTION_ID
+        ? floor.context === 'campus'
+        : floor.context === 'building' &&
+          String(floor.buildingId?._id || floor.buildingId) === selectedBuildingId
+    )),
     [floorRecords, selectedBuildingId],
   )
   const selectedBuilding = buildings.find((building) => building._id === selectedBuildingId)
@@ -81,10 +94,40 @@ function MapEditor() {
   const navigationNodes = nodes.filter((node) => node.type === 'nav')
   const roomNodes = nodes.filter((node) => node.type === 'room')
   const stairNodes = nodes.filter((node) => node.type === 'stair')
-  const testNodes = allTestNodes.filter((node) =>
-    floors.some((floor) => floor._id === String(node.floorId)),
+  const buildingNameById = useMemo(() => {
+    const byId = new Map()
+    buildings.forEach((building) => byId.set(building._id, building.name))
+    return byId
+  }, [buildings])
+  const testGroupFloors = useMemo(
+    () => floorRecords.map((floor) => {
+      const buildingId = String(floor.buildingId?._id || floor.buildingId)
+      const contextPrefix = floor.context === 'campus'
+        ? 'Campus'
+        : buildingNameById.get(buildingId) || 'Building'
+      return {
+        ...floor,
+        name: `${contextPrefix} · ${floor.name}`,
+      }
+    }),
+    [buildingNameById, floorRecords],
   )
-  const testNodeGroups = groupNodesByFloor(testNodes, floors)
+  const testNodes = allTestNodes.map((node) => {
+      if (node.type !== 'buildingConnection') {
+        return node
+      }
+      const connectorType = typeof node.connectionType === 'string'
+        ? node.connectionType
+        : ''
+      const connectorGroup = typeof node.connectionGroup === 'string'
+        ? node.connectionGroup.trim()
+        : ''
+      return {
+        ...node,
+        displayLabel: `${node.name} — ${connectorType}${connectorGroup ? ` · ${connectorGroup}` : ''}`,
+      }
+    })
+  const testNodeGroups = groupNodesByFloor(testNodes, testGroupFloors)
   const stairPart2Nodes = allStairNodes.filter((node) => node.stairPart === 2)
   const stairPart1Nodes = allStairNodes.filter((node) => node.stairPart === 1)
   const crossFloorFromNode = stairPart2Nodes.find((node) => node._id === crossFloorFromId)
@@ -124,6 +167,9 @@ function MapEditor() {
       String(node.floorId) !== selectedFloorId &&
       floors.some((floor) => floor._id === String(node.floorId)),
   )
+  const firstConnectionNode = [...nodes, ...allStairNodes, ...remoteBuildingConnectionNodes].find(
+    (item) => item._id === connectionNodeIds[0],
+  )
   const floorNumbers = floors.map((floor) => Number(floor.floorNumber)).filter(Number.isFinite)
   const lowestFloorNumber = Math.min(...floorNumbers)
   const highestFloorNumber = Math.max(...floorNumbers)
@@ -149,6 +195,10 @@ function MapEditor() {
     return String(floorId && typeof floorId === 'object' ? floorId._id : floorId)
   }
 
+  function isValidObjectId(value) {
+    return typeof value === 'string' && /^[0-9a-f]{24}$/i.test(value)
+  }
+
   function getFloorLabel(node) {
     const floor = node.floorId && typeof node.floorId === 'object'
       ? node.floorId
@@ -168,9 +218,77 @@ function MapEditor() {
     return `${getFloorName(node)} — ${group ? `${group} — ` : ''}Stair P${node.stairPart}`
   }
 
+  function decoratePathNode(node) {
+    const floor = floorRecords.find((item) => item._id === getNodeFloorId(node))
+    return {
+      ...node,
+      floorName: floor?.name,
+      floorNumber: floor?.floorNumber,
+      context: floor?.context,
+      buildingId: String((floor?.buildingId && typeof floor.buildingId === 'object'
+        ? floor.buildingId._id
+        : floor?.buildingId) || ''),
+    }
+  }
+
+  function getFloorMapLabel(floorId) {
+    const floor = floorRecords.find((item) => item._id === floorId)
+    if (!floor) {
+      return null
+    }
+    const buildingId = String(
+      (floor.buildingId && typeof floor.buildingId === 'object'
+        ? floor.buildingId._id
+        : floor.buildingId) || '',
+    )
+    const contextLabel = floor.context === 'campus'
+      ? 'Campus'
+      : buildingNameById.get(buildingId) || 'Building'
+    return `${contextLabel} · ${floor.name}`
+  }
+
+  function goToFloorForRoute(floorId) {
+    if (typeof floorId !== 'string' || floorId === '') {
+      return false
+    }
+    const floor = floorRecords.find((item) => item._id === floorId)
+    if (!floor) {
+      setRouteMessage('A floor in this route is no longer available. Restore the missing floor or re-run the route.')
+      return false
+    }
+    const buildingId = floor.context === 'campus'
+      ? CAMPUS_SELECTION_ID
+      : String(floor.buildingId?._id || floor.buildingId || '')
+    if (String(buildingId) !== String(selectedBuildingId) || floor._id !== selectedFloorId) {
+      setSelectedBuildingId(buildingId)
+      setSelectedFloorId(floor._id)
+      setLoadingNodes(true)
+      setNodes([])
+      setConnections([])
+      setSelectedNodeId('')
+      setConnectionNodeIds([])
+      setStairPosition(null)
+      setStairPart('')
+      setError('')
+    }
+    return true
+  }
+
+  function goToRouteSegment(index) {
+    const segment = guidedSegments[index]
+    if (!segment) {
+      return
+    }
+    if (goToFloorForRoute(getNodeFloorId(segment.nodes[0]))) {
+      setActiveRouteSegmentIndex(index)
+      setRouteMessage('')
+    }
+  }
+
   function clearRoute() {
     setRouteResult(null)
     setRouteMessage('')
+    setActiveRouteSegmentIndex(0)
   }
 
   async function refreshFloors() {
@@ -191,17 +309,19 @@ function MapEditor() {
     const response = await fetch(`${API_URL}/nodes/${floorId}`)
     const floorNodes = await readResponse(response)
     const floor = floors.find((item) => item._id === floorId)
-    const campusFloorNodes = floorNodes
-      .filter((node) => ['nav', 'room', 'stair'].includes(node.type))
+    const floorNodesOfInterest = floorNodes
+      .filter((node) => ['nav', 'room', 'stair', 'buildingConnection'].includes(node.type))
       .map((node) => ({ ...node, floorName: floor?.name, floorNumber: floor?.floorNumber }))
-    setNodes(campusFloorNodes)
+    const testFloorNodes = floorNodesOfInterest
+      .filter((node) => ['nav', 'room', 'stair', 'buildingConnection'].includes(node.type))
+    setNodes(floorNodesOfInterest)
     setAllTestNodes((currentNodes) => [
       ...currentNodes.filter((node) => String(node.floorId) !== floorId),
-      ...campusFloorNodes,
+      ...testFloorNodes,
     ])
     setAllStairNodes((currentNodes) => [
       ...currentNodes.filter((node) => String(node.floorId) !== floorId),
-      ...campusFloorNodes.filter((node) => node.type === 'stair'),
+      ...testFloorNodes.filter((node) => node.type === 'stair'),
     ])
     return floorNodes
   }
@@ -266,9 +386,8 @@ function MapEditor() {
           }),
         )
         if (active) {
-          const campusNodes = nodeLists.flat()
-          setAllStairNodes(campusNodes.filter((node) => node.type === 'stair'))
-          setAllTestNodes(campusNodes.filter((node) => ['nav', 'room', 'stair'].includes(node.type)))
+          const currentContextNodes = nodeLists.flat()
+          setAllStairNodes(currentContextNodes.filter((node) => node.type === 'stair'))
         }
       } catch (loadError) {
         if (active) {
@@ -282,6 +401,97 @@ function MapEditor() {
       active = false
     }
   }, [floors])
+
+  useEffect(() => {
+    if (floorRecords.length === 0) {
+      return undefined
+    }
+
+    let active = true
+
+    async function loadAllTestNodes() {
+      try {
+        const nodeLists = await Promise.all(
+          floorRecords.map(async (floor) => {
+            const response = await fetch(`${API_URL}/nodes/${floor._id}`)
+            const floorNodes = await readResponse(response)
+            return floorNodes
+              .filter((node) => ['nav', 'room', 'stair', 'buildingConnection'].includes(node.type))
+              .map((node) => ({
+                ...node,
+                floorName: floor.name,
+                floorNumber: floor.floorNumber,
+                context: floor.context,
+                buildingId: floor.buildingId?._id || floor.buildingId,
+              }))
+          }),
+        )
+        if (active) {
+          setAllTestNodes(nodeLists.flat())
+        }
+      } catch (loadError) {
+        if (active) {
+          setError(loadError.message)
+        }
+      }
+    }
+
+    loadAllTestNodes()
+    return () => {
+      active = false
+    }
+  }, [floorRecords])
+
+  useEffect(() => {
+    const pendingNode = [...nodes, ...allStairNodes].find(
+      (item) => item._id === connectionNodeIds[0],
+    )
+    if (
+      mode !== 'connect' ||
+      connectionNodeIds.length !== 1 ||
+      !pendingNode ||
+      pendingNode.type !== 'buildingConnection'
+    ) {
+      return undefined
+    }
+
+    let active = true
+
+    async function loadOtherMapConnectors() {
+      const otherContextFloors = floorRecords.filter((floor) =>
+        selectedBuildingId === CAMPUS_SELECTION_ID
+          ? floor.context === 'building'
+          : floor.context === 'campus',
+      )
+      try {
+        const floorNodeLists = await Promise.all(
+          otherContextFloors.map(async (floor) => {
+            const response = await fetch(`${API_URL}/nodes/${floor._id}`)
+            const floorNodes = await readResponse(response)
+            return floorNodes
+              .filter((node) => node.type === 'buildingConnection')
+              .map((node) => ({ ...node, floorName: floor.name, floorNumber: floor.floorNumber }))
+          }),
+        )
+        if (active) {
+          setRemoteBuildingConnectionNodes(
+            floorNodeLists
+              .flat()
+              .filter((node) => String(node.floorId) !== String(pendingNode.floorId)),
+          )
+        }
+      } catch (loadError) {
+        if (active) {
+          setError(loadError.message)
+        }
+      }
+    }
+
+    loadOtherMapConnectors()
+    return () => {
+      active = false
+    }
+  }, [mode, connectionNodeIds, nodes, allStairNodes, selectedBuildingId, floorRecords])
 
   useEffect(() => {
     if (!selectedFloorId) {
@@ -301,7 +511,7 @@ function MapEditor() {
           readResponse(connectionsResponse),
         ])
         if (active) {
-          setNodes(floorNodes.filter((node) => ['nav', 'room', 'stair'].includes(node.type)))
+          setNodes(floorNodes.filter((node) => ['nav', 'room', 'stair', 'buildingConnection'].includes(node.type)))
           setConnections(floorConnections)
         }
       } catch (loadError) {
@@ -327,16 +537,19 @@ function MapEditor() {
     setModalError('')
     setSuccessMessage('')
     if (!selectedBuildingId) {
-      setError('Select a building before adding a floor.')
+      setError('Select a building or the campus map before adding a floor.')
       return
     }
+    const isCampusContext = selectedBuildingId === CAMPUS_SELECTION_ID
     setSaving(true)
 
     const formData = new FormData()
     formData.append('name', name)
     formData.append('floorNumber', floorNumber)
-    formData.append('context', 'building')
-    formData.append('buildingId', selectedBuildingId)
+    formData.append('context', isCampusContext ? 'campus' : 'building')
+    if (!isCampusContext) {
+      formData.append('buildingId', selectedBuildingId)
+    }
     if (mapImage) {
       formData.append('mapImage', mapImage)
     }
@@ -348,8 +561,11 @@ function MapEditor() {
       })
       const newFloor = await readResponse(response)
       const floorList = await refreshFloors()
+      const belongsToSelection = isCampusContext
+        ? newFloor.context === 'campus'
+        : String(newFloor.buildingId?._id || newFloor.buildingId) === selectedBuildingId
       if (
-        String(newFloor.buildingId?._id || newFloor.buildingId) === selectedBuildingId &&
+        belongsToSelection &&
         floorList.some((floor) => floor._id === newFloor._id)
       ) {
         setLoadingNodes(true)
@@ -359,7 +575,7 @@ function MapEditor() {
         setConnectionNodeIds([])
         setSelectedFloorId(newFloor._id)
       }
-      setSuccessMessage(`Floor "${newFloor.name}" added to ${selectedBuilding?.name || 'the selected building'}.`)
+      setSuccessMessage(`Floor "${newFloor.name}" added to ${isCampusContext ? 'the campus map' : selectedBuilding?.name || 'the selected building'}.`)
       setMode('select')
       clearRoute()
       setName('')
@@ -409,7 +625,6 @@ function MapEditor() {
         setSelectedNodeId('')
         setConnectionNodeIds([])
         setAllStairNodes([])
-        setAllTestNodes([])
         setStartNodeId('')
         setEndNodeId('')
         setStairPosition(null)
@@ -460,9 +675,12 @@ function MapEditor() {
         method: 'DELETE',
       })
       await readResponse(response)
-      const buildingList = await refreshBuildings()
+      const [buildingList, freshFloorList] = await Promise.all([
+        refreshBuildings(),
+        refreshFloors(),
+      ])
       const nextBuilding = buildingList[0]
-      const nextFloor = floorRecords.find((floor) =>
+      const nextFloor = freshFloorList.find((floor) =>
         floor.context === 'building' &&
         String(floor.buildingId?._id || floor.buildingId) === nextBuilding?._id,
       )
@@ -474,7 +692,6 @@ function MapEditor() {
       setSelectedNodeId('')
       setConnectionNodeIds([])
       setAllStairNodes([])
-      setAllTestNodes([])
       setEditingRoomName(false)
       setRoomNameDraft('')
       setRoomPosition(null)
@@ -521,9 +738,12 @@ function MapEditor() {
       return
     }
 
+    const isCampusContext = buildingId === CAMPUS_SELECTION_ID
     const firstFloor = floorRecords.find((floor) =>
-      floor.context === 'building' &&
-      String(floor.buildingId?._id || floor.buildingId) === buildingId,
+      isCampusContext
+        ? floor.context === 'campus'
+        : floor.context === 'building' &&
+          String(floor.buildingId?._id || floor.buildingId) === buildingId,
     )
     setSelectedBuildingId(buildingId)
     setSelectedFloorId(firstFloor?._id || '')
@@ -532,7 +752,6 @@ function MapEditor() {
     setSelectedNodeId('')
     setConnectionNodeIds([])
     setAllStairNodes([])
-    setAllTestNodes([])
     setStartNodeId('')
     setEndNodeId('')
     setLoadingNodes(Boolean(firstFloor))
@@ -585,7 +804,7 @@ function MapEditor() {
   }
 
   async function handleMapClick(event) {
-    if (!['nav', 'room', 'stair'].includes(mode) || !selectedFloor || loadingNodes || creatingNodeRef.current) {
+    if (!['nav', 'room', 'stair', 'entrance'].includes(mode) || !selectedFloor || loadingNodes || creatingNodeRef.current) {
       return
     }
 
@@ -616,6 +835,13 @@ function MapEditor() {
       setStairPosition({ x, y })
       setStairGroup('')
       setStairPart(String(allowedStairParts[0]))
+      setError('')
+      return
+    }
+    if (mode === 'entrance') {
+      setEntrancePosition({ x, y })
+      setEntranceName('')
+      setEntranceGroup('')
       setError('')
       return
     }
@@ -739,6 +965,46 @@ function MapEditor() {
     }
   }
 
+  async function handleCreateEntrance(event) {
+    event.preventDefault()
+    const connectorName = entranceName.trim()
+    const group = entranceGroup.trim()
+    if (!selectedFloor || !entrancePosition || !connectorName || !group || creatingNodeRef.current) {
+      return
+    }
+
+    creatingNodeRef.current = true
+    setSavingEntrance(true)
+    setError('')
+    try {
+      const response = await fetch(`${API_URL}/nodes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: connectorName,
+          type: 'buildingConnection',
+          connectionType: 'entrance',
+          connectionGroup: group,
+          x: entrancePosition.x,
+          y: entrancePosition.y,
+          floorId: selectedFloor._id,
+        }),
+      })
+      const newNode = await readResponse(response)
+      const updatedNodes = await refreshNodes(selectedFloor._id)
+      const savedNode = updatedNodes.find((node) => node._id === newNode._id)
+      setSelectedNodeId(savedNode ? savedNode._id : '')
+      setEntrancePosition(null)
+      setEntranceName('')
+      setEntranceGroup('')
+    } catch (createError) {
+      setError(createError.message)
+    } finally {
+      creatingNodeRef.current = false
+      setSavingEntrance(false)
+    }
+  }
+
   async function handleDeleteNode(node) {
     const nodeDescription = node.type === 'room'
       ? 'room'
@@ -769,8 +1035,9 @@ function MapEditor() {
   async function handleRenameRoom(event) {
     event.preventDefault()
     const updatedName = roomNameDraft.trim()
-    if (!selectedNode || selectedNode.type !== 'room' || !updatedName) {
-      setError('Room name cannot be empty.')
+    const editableTypes = ['room', 'buildingConnection']
+    if (!selectedNode || !editableTypes.includes(selectedNode.type) || !updatedName) {
+      setError('Node name cannot be empty.')
       return
     }
 
@@ -820,17 +1087,30 @@ function MapEditor() {
 
     if (connectionNodeIds.length === 0) {
       setError('')
+      setCrossMapPair(null)
       setConnectionNodeIds([node._id])
       return
     }
 
-    const firstNode = [...nodes, ...allStairNodes].find((item) => item._id === connectionNodeIds[0])
+    const firstNode = [...nodes, ...allStairNodes, ...remoteBuildingConnectionNodes].find(
+      (item) => item._id === connectionNodeIds[0],
+    )
     if (!firstNode) {
       setConnectionNodeIds([node._id])
       return
     }
 
     if (firstNode._id === node._id) {
+      return
+    }
+
+    const buildingConnectionToRoomOrStair =
+      (firstNode.type === 'buildingConnection' &&
+        (node.type === 'room' || node.type === 'stair')) ||
+      (node.type === 'buildingConnection' &&
+        (firstNode.type === 'room' || firstNode.type === 'stair'))
+    if (buildingConnectionToRoomOrStair) {
+      setError('Building and entrance connectors attach to a nearby ordinary navigation node, not directly to a room or stair.')
       return
     }
 
@@ -853,6 +1133,21 @@ function MapEditor() {
         return
       }
     } else {
+      if (
+        firstNode.type === 'buildingConnection' &&
+        node.type === 'buildingConnection'
+      ) {
+        const fromFloorId = getNodeFloorId(firstNode)
+        const toFloorId = getNodeFloorId(node)
+        if (fromFloorId === toFloorId) {
+          setError('Building connectors must connect across different maps.')
+          return
+        }
+        setCrossMapPair({ from: firstNode._id, to: node._id })
+        setCrossMapDistance('')
+        setError('')
+        return
+      }
       const firstFloor = floors.find((floor) => floor._id === getNodeFloorId(firstNode))
       const secondFloor = floors.find((floor) => floor._id === getNodeFloorId(node))
       const lowerNode = Number(firstFloor?.floorNumber) < Number(secondFloor?.floorNumber)
@@ -896,6 +1191,71 @@ function MapEditor() {
       setConnectionNodeIds([])
     } finally {
       setSavingConnection(false)
+    }
+  }
+
+  async function handleCreateCrossMapConnection(event) {
+    event.preventDefault()
+    if (!crossMapPair || savingCrossMap) {
+      return
+    }
+
+    if (!isValidObjectId(crossMapPair.from) || !isValidObjectId(crossMapPair.to)) {
+      setError('Choose two valid nodes to connect.')
+      return
+    }
+
+    const fromNode = [...nodes, ...allStairNodes, ...remoteBuildingConnectionNodes].find(
+      (item) => item._id === crossMapPair.from,
+    )
+    const toNode = [...nodes, ...allStairNodes, ...remoteBuildingConnectionNodes].find(
+      (item) => item._id === crossMapPair.to,
+    )
+    if (!fromNode || !toNode) {
+      setError('Choose two valid nodes to connect.')
+      return
+    }
+
+    const fromFloorId = getNodeFloorId(fromNode)
+    const toFloorId = getNodeFloorId(toNode)
+    const floorsExist =
+      floorRecords.some((floor) => floor._id === fromFloorId) &&
+      floorRecords.some((floor) => floor._id === toFloorId)
+    if (!floorsExist || fromFloorId === toFloorId) {
+      setError('Both endpoints must belong to their intended floors before connecting.')
+      return
+    }
+
+    const distanceValue = Number(crossMapDistance)
+    if (String(crossMapDistance).trim() === '' || !Number.isFinite(distanceValue) || distanceValue < 0) {
+      setError('A finite, non-negative distance is required for cross-map connections.')
+      return
+    }
+
+    setSavingCrossMap(true)
+    setError('')
+    try {
+      const response = await fetch(`${API_URL}/connections`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: crossMapPair.from,
+          to: crossMapPair.to,
+          distance: distanceValue,
+        }),
+      })
+      await readResponse(response)
+      await refreshConnections(selectedFloorId)
+      setCrossMapPair(null)
+      setCrossMapDistance('')
+      setConnectionNodeIds([])
+    } catch (createError) {
+      setError(createError.message)
+      setCrossMapPair(null)
+      setCrossMapDistance('')
+      setConnectionNodeIds([])
+    } finally {
+      setSavingCrossMap(false)
     }
   }
 
@@ -1002,7 +1362,16 @@ function MapEditor() {
         setRouteMessage('No route found between the selected points.')
         return
       }
-      setRouteResult(result)
+      const decoratedResult = {
+        ...result,
+        path: result.path.map(decoratePathNode),
+      }
+      setRouteResult(decoratedResult)
+      setRouteMessage('')
+      setActiveRouteSegmentIndex(0)
+      if (decoratedResult.path.length > 0) {
+        goToFloorForRoute(getNodeFloorId(decoratedResult.path[0]))
+      }
     } catch (routeError) {
       setError(routeError.message)
     } finally {
@@ -1048,6 +1417,32 @@ function MapEditor() {
       message: `Continue via ${fromNode.name} → ${getFloorLabel(toNode)} ${toNode.name}`,
     }]
   })
+  const guidedSegments = buildRouteSegments(routePath)
+  const activeRouteSegment = guidedSegments[activeRouteSegmentIndex] || null
+  const activeRouteSegmentFloorId = getNodeFloorId(activeRouteSegment?.nodes[0] || {})
+  const activeRouteEdges = activeRouteSegment
+    ? activeRouteSegment.nodes.slice(0, -1).map((fromNode, index) => {
+        const toNode = activeRouteSegment.nodes[index + 1]
+        return {
+          fromNode,
+          toNode,
+          key: `${fromNode._id}-${toNode._id}-segment-${activeRouteSegmentIndex}-${index}`,
+        }
+      })
+    : []
+  const displayedRouteSegments =
+    activeRouteSegment && activeRouteSegmentFloorId === selectedFloorId
+      ? activeRouteEdges
+      : routeSegments
+  const transitionCue = (() => {
+    if (!activeRouteSegment || activeRouteSegmentIndex === 0) {
+      return ''
+    }
+    const previousSegment = guidedSegments[activeRouteSegmentIndex - 1]
+    const entryNode = previousSegment?.nodes[previousSegment.nodes.length - 1]
+    const label = getFloorMapLabel(activeRouteSegmentFloorId) || 'the next map'
+    return entryNode ? `Continue via ${entryNode.name} → ${label}` : `Continue to ${label}`
+  })()
 
   function handleLogout() {
     sessionStorage.removeItem('role')
@@ -1091,6 +1486,7 @@ function MapEditor() {
                 onChange={(event) => handleSelectBuilding(event.target.value)}
                 value={selectedBuildingId}
               >
+                <option value={CAMPUS_SELECTION_ID}>Campus (outdoor)</option>
                 {buildings.map((building) => (
                   <option key={building._id} value={building._id}>
                     {building.name}
@@ -1147,7 +1543,11 @@ function MapEditor() {
             <p className="sidebar-message">Loading floors…</p>
           ) : floors.length === 0 ? (
             <p className="sidebar-message">
-              {selectedBuilding ? 'No floors in this building yet.' : 'Select or create a building to manage its floors.'}
+              {selectedBuildingId === CAMPUS_SELECTION_ID
+                ? 'No campus floor yet. Add the Campus Ground Map.'
+                : selectedBuilding
+                  ? 'No floors in this building yet.'
+                  : 'Select or create a building to manage its floors.'}
             </p>
           ) : (
             <ul className="floor-list">
@@ -1163,7 +1563,9 @@ function MapEditor() {
                     type="button"
                   >
                     <span className="floor-choice-name">{floor.name}</span>
-                    <span className="floor-choice-number">Floor {floor.floorNumber}</span>
+                    <span className="floor-choice-number">
+                      {floor.context === 'campus' ? 'Campus map' : `Floor ${floor.floorNumber}`}
+                    </span>
                   </button>
                   <button
                     aria-label={`Delete ${floor.name}`}
@@ -1201,7 +1603,7 @@ function MapEditor() {
             </div>
             {selectedFloor && (
               <span className="workspace-floor-number">
-                Floor {selectedFloor.floorNumber}
+                {selectedFloor.context === 'campus' ? 'Campus map' : `Floor ${selectedFloor.floorNumber}`}
               </span>
             )}
           </div>
@@ -1259,6 +1661,19 @@ function MapEditor() {
               Stair
             </button>
             <button
+              aria-pressed={mode === 'entrance'}
+              className={`tool-button${mode === 'entrance' ? ' is-active' : ''}`}
+              disabled={!selectedFloor?.mapImage}
+              onClick={() => {
+                setSelectedNodeId('')
+                setConnectionNodeIds([])
+                setMode((current) => (current === 'entrance' ? 'select' : 'entrance'))
+              }}
+              type="button"
+            >
+              Entrance
+            </button>
+            <button
               aria-pressed={mode === 'connect'}
               className={`tool-button${mode === 'connect' ? ' is-active' : ''}`}
               disabled={nodes.length + remoteStairNodes.length < 2}
@@ -1309,20 +1724,25 @@ function MapEditor() {
           {mode === 'stair' && selectedFloor && (
             <p className="map-mode-hint">Stair mode — click on the map, then choose the allowed stair part</p>
           )}
+          {mode === 'entrance' && selectedFloor && (
+            <p className="map-mode-hint">Entrance mode — click on the map, then enter the connector name and connection group</p>
+          )}
           {mode === 'connect' && selectedFloor && (
             <p className="map-mode-hint">
               {savingConnection
                 ? 'Saving connection…'
-                : connectionNodeIds.length > 0
-                  ? 'Select a second node to connect'
-                  : 'Select two nodes to connect'}
+                : firstConnectionNode?.type === 'buildingConnection'
+                  ? 'Entrance/building connector selected — attach it to a nearby ordinary navigation node on this map, or connect it to the matching connector on the other map listed below.'
+                  : connectionNodeIds.length > 0
+                    ? 'Select a second node to connect'
+                    : 'Connect navigation nodes to nav nodes, rooms, stairs, or building connectors. Entrance/building connectors attach to a nearby ordinary navigation node — not directly to a room or stair. Stairs may also connect to the other stair part.'}
             </p>
           )}
           {mode === 'delete' && selectedNode && (
             <p className="map-mode-hint">Delete mode — select a node, then confirm deletion in the editor panel</p>
           )}
 
-          <div className={`map-stage${['nav', 'room', 'stair'].includes(mode) ? ' is-placing' : ''}`}>
+          <div className={`map-stage${['nav', 'room', 'stair', 'entrance'].includes(mode) ? ' is-placing' : ''}`}>
             {selectedFloor ? (
               selectedFloor.mapImage ? (
                 <div className="map-image-holder">
@@ -1361,14 +1781,14 @@ function MapEditor() {
                         )
                       })}
                     </svg>
-                    {routeResult && (
+                    {routeResult && !loadingNodes && (
                       <svg
                         aria-hidden="true"
                         className="map-route-overlay"
                         preserveAspectRatio="none"
                         viewBox="0 0 100 100"
                       >
-                        {routeSegments.map((segment) => (
+                        {displayedRouteSegments.map((segment) => (
                           <line
                             key={segment.key}
                             x1={segment.fromNode.x}
@@ -1416,8 +1836,8 @@ function MapEditor() {
           <section className="inspector-section">
             <p className="inspector-label">Mode</p>
             <div className="mode-summary">
-              <span className={`mode-indicator${mode === 'nav' ? ' is-nav' : mode === 'room' ? ' is-room' : mode === 'stair' ? ' is-stair' : mode === 'connect' ? ' is-connect' : ''}`} />
-              {mode === 'nav' ? 'Navigation Node' : mode === 'room' ? 'Room' : mode === 'stair' ? 'Stair' : mode === 'connect' ? 'Connect' : mode === 'test' ? 'Test Navigation' : mode === 'delete' ? 'Delete' : 'Select'}
+              <span className={`mode-indicator${mode === 'nav' ? ' is-nav' : mode === 'room' ? ' is-room' : mode === 'stair' ? ' is-stair' : mode === 'entrance' ? ' is-entrance' : mode === 'connect' ? ' is-connect' : ''}`} />
+              {mode === 'nav' ? 'Navigation Node' : mode === 'room' ? 'Room' : mode === 'stair' ? 'Stair' : mode === 'entrance' ? 'Entrance' : mode === 'connect' ? 'Connect' : mode === 'test' ? 'Test Navigation' : mode === 'delete' ? 'Delete' : 'Select'}
             </div>
           </section>
 
@@ -1488,6 +1908,50 @@ function MapEditor() {
                   ))}
                 </div>
               )}
+            </section>
+          )}
+
+          {routeResult && guidedSegments.length > 1 && (
+            <section
+              aria-label="Guided route navigation"
+              className="inspector-section route-guidance"
+            >
+              <p className="inspector-label">Guided Route</p>
+              {routeMessage && (
+                <p className="test-route-message" role="status">{routeMessage}</p>
+              )}
+              <div className="route-guidance-step">
+                <span className="route-guidance-indicator">
+                  Map {activeRouteSegmentIndex + 1} of {guidedSegments.length}
+                </span>
+                <span className="route-guidance-map">
+                  {getFloorMapLabel(activeRouteSegmentFloorId) || 'Unavailable floor'}
+                </span>
+                {activeRouteSegmentIndex === guidedSegments.length - 1 && (
+                  <span className="route-guidance-arrival">Arrived at destination</span>
+                )}
+              </div>
+              {transitionCue && (
+                <p className="route-guidance-cue">{transitionCue}</p>
+              )}
+              <div className="route-guidance-actions">
+                <button
+                  className="test-clear-button"
+                  disabled={activeRouteSegmentIndex === 0}
+                  onClick={() => goToRouteSegment(activeRouteSegmentIndex - 1)}
+                  type="button"
+                >
+                  Back
+                </button>
+                <button
+                  className="test-navigate-button"
+                  disabled={activeRouteSegmentIndex === guidedSegments.length - 1}
+                  onClick={() => goToRouteSegment(activeRouteSegmentIndex + 1)}
+                  type="button"
+                >
+                  Next
+                </button>
+              </div>
             </section>
           )}
 
@@ -1661,6 +2125,32 @@ function MapEditor() {
             </section>
           )}
 
+          {mode === 'connect' &&
+            firstConnectionNode?.type === 'buildingConnection' &&
+            remoteBuildingConnectionNodes.length > 0 && (
+            <section className="inspector-section">
+              <div className="inspector-section-heading">
+                <p className="inspector-label">Building Connectors on the Other Map</p>
+                <span className="node-count">{remoteBuildingConnectionNodes.length}</span>
+              </div>
+              <ul className="inspector-node-list">
+                {remoteBuildingConnectionNodes.map((node) => (
+                  <li key={node._id}>
+                    <button
+                      aria-pressed={connectionNodeIds.includes(node._id)}
+                      className={`inspector-node${connectionNodeIds.includes(node._id) ? ' is-active' : ''}`}
+                      onClick={() => handleChooseNode(node)}
+                      type="button"
+                    >
+                      <span className="inspector-node-dot" />
+                      {node.name} · {node.floorName}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           <section className="inspector-section">
             <div className="inspector-section-heading">
               <p className="inspector-label">Connections</p>
@@ -1717,12 +2207,12 @@ function MapEditor() {
           {selectedNode && (
             <section className="inspector-section selected-node">
               <p className="inspector-label">
-                {selectedNode.type === 'room' ? 'Selected Room' : selectedNode.type === 'stair' ? 'Selected Stair' : 'Selected Node'}
+                {selectedNode.type === 'room' ? 'Selected Room' : selectedNode.type === 'stair' ? 'Selected Stair' : selectedNode.type === 'buildingConnection' ? 'Selected Connector' : 'Selected Node'}
               </p>
-              {selectedNode.type === 'room' && editingRoomName ? (
+              {['room', 'buildingConnection'].includes(selectedNode.type) && editingRoomName ? (
                 <form className="room-rename-form" onSubmit={handleRenameRoom}>
                   <input
-                    aria-label="Room name"
+                    aria-label={selectedNode.type === 'buildingConnection' ? 'Connector name' : 'Room name'}
                     autoFocus
                     onChange={(event) => setRoomNameDraft(event.target.value)}
                     value={roomNameDraft}
@@ -1751,7 +2241,7 @@ function MapEditor() {
               ) : (
                 <>
                   <strong className="selected-node-name">{selectedNode.name}</strong>
-                  {selectedNode.type === 'room' && (
+                  {['room', 'buildingConnection'].includes(selectedNode.type) && (
                     <button
                       className="room-rename-edit"
                       onClick={() => {
@@ -1768,8 +2258,16 @@ function MapEditor() {
               )}
               <p className="inspector-label node-type-label">Type</p>
               <span className="node-type-value">
-                {selectedNode.type === 'room' ? 'Room' : selectedNode.type === 'stair' ? 'Stair' : 'Navigation Node'}
+                {selectedNode.type === 'room' ? 'Room' : selectedNode.type === 'stair' ? 'Stair' : selectedNode.type === 'buildingConnection' ? (selectedNode.connectionType === 'entrance' ? 'Entrance Connector' : 'Building Connection') : 'Navigation Node'}
               </span>
+              {selectedNode.type === 'buildingConnection' && (
+                <>
+                  <p className="inspector-label node-type-label">Connection Type</p>
+                  <span className="node-type-value">{selectedNode.connectionType}</span>
+                  <p className="inspector-label node-type-label">Connection Group</p>
+                  <span className="node-type-value">{selectedNode.connectionGroup}</span>
+                </>
+              )}
               {selectedNode.type === 'stair' && (
                 <>
                   {selectedNode.stairGroup && (
@@ -2132,6 +2630,138 @@ function MapEditor() {
                 </button>
                 <button disabled={savingStair} type="submit">
                   {savingStair ? 'Saving…' : 'Save Stair'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+      {entrancePosition && (
+        <div className="modal-backdrop">
+          <section
+            aria-labelledby="entrance-group-title"
+            aria-modal="true"
+            className="floor-modal room-name-modal"
+            role="dialog"
+          >
+            <div className="modal-heading">
+              <div>
+                <p className="workspace-kicker">ENTRANCE NODE</p>
+                <h2 id="entrance-group-title">Configure entrance connector</h2>
+              </div>
+              <button
+                aria-label="Cancel entrance placement"
+                className="modal-close"
+                disabled={savingEntrance}
+                onClick={() => {
+                  setEntrancePosition(null)
+                  setEntranceName('')
+                  setEntranceGroup('')
+                }}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="floor-form" onSubmit={handleCreateEntrance}>
+              <label>
+                Connector Name
+                <input
+                  autoFocus
+                  onChange={(event) => setEntranceName(event.target.value)}
+                  placeholder="e.g. Main Gate Entrance"
+                  required
+                  value={entranceName}
+                />
+              </label>
+              <label>
+                Connection group
+                <input
+                  onChange={(event) => setEntranceGroup(event.target.value)}
+                  placeholder="e.g. MainGate"
+                  required
+                  value={entranceGroup}
+                />
+              </label>
+              <p className="sidebar-message" role="note">Use the same group name on the campus map and the matching building floor.</p>
+              <div className="modal-actions">
+                <button
+                  className="modal-cancel"
+                  disabled={savingEntrance}
+                  onClick={() => {
+                    setEntrancePosition(null)
+                    setEntranceName('')
+                    setEntranceGroup('')
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button disabled={savingEntrance} type="submit">
+                  {savingEntrance ? 'Saving…' : 'Save Entrance'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+      {crossMapPair && (
+        <div className="modal-backdrop">
+          <section
+            aria-labelledby="cross-map-title"
+            aria-modal="true"
+            className="floor-modal room-name-modal"
+            role="dialog"
+          >
+            <div className="modal-heading">
+              <div>
+                <p className="workspace-kicker">CROSS-MAP CONNECTION</p>
+                <h2 id="cross-map-title">Connect the two connectors</h2>
+              </div>
+              <button
+                aria-label="Cancel cross-map connection"
+                className="modal-close"
+                disabled={savingCrossMap}
+                onClick={() => {
+                  setCrossMapPair(null)
+                  setCrossMapDistance('')
+                  setConnectionNodeIds([])
+                }}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="floor-form" onSubmit={handleCreateCrossMapConnection}>
+              <label>
+                Distance
+                <input
+                  autoFocus
+                  min="0"
+                  onChange={(event) => setCrossMapDistance(event.target.value)}
+                  placeholder="e.g. 45"
+                  required
+                  step="any"
+                  type="number"
+                  value={crossMapDistance}
+                />
+              </label>
+              <p className="sidebar-message" role="note">The backend requires an explicit distance for a cross-map connection. Use the same connection group on both connectors, and the matching entrance group will be validated automatically.</p>
+              <div className="modal-actions">
+                <button
+                  className="modal-cancel"
+                  disabled={savingCrossMap}
+                  onClick={() => {
+                    setCrossMapPair(null)
+                    setCrossMapDistance('')
+                    setConnectionNodeIds([])
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button disabled={savingCrossMap} type="submit">
+                  {savingCrossMap ? 'Saving…' : 'Connect Connectors'}
                 </button>
               </div>
             </form>

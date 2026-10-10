@@ -7,6 +7,8 @@ const {
   isSameFloorConnectionAllowed,
   isSkywalkEndpointPair,
   skywalkFloorsValid,
+  entranceFloorsValid,
+  entranceEndpointsMatch,
   shareSameBuildingId,
   skywalkEndpointsMatch,
   isValidCrossBuildingDistance,
@@ -165,5 +167,80 @@ test('nav, room, and stair nodes validate without skywalk fields', async () => {
 test('buildingConnection nodes require connectionType and connectionGroup', async () => {
   await assert.rejects(
     new Node({ name: 'BC1', type: 'buildingConnection', x: 0, y: 0, floorId: FLOOR_ID }).validate(),
+  )
+})
+
+// F. Entrance cross-map rules
+
+test('accepts an entrance type with a non-empty group', () => {
+  const result = normalizeBuildingConnectionFields('entrance', 'MainGate')
+  assert.equal(result.error, null)
+  assert.equal(result.connectionType, 'entrance')
+  assert.equal(result.connectionGroup, 'MainGate')
+})
+
+test('rejects unsupported connection types (the Entrance-tool 400 regression)', () => {
+  // Reproduces the exact route call that surfaced "Unsupported building
+  // connection type." in the UI: the Entrance tool POSTs connectionType
+  // "entrance" with a non-empty group, and this branch must not reject it.
+  const valid = normalizeBuildingConnectionFields('entrance', 'MainGate')
+  assert.equal(valid.error, null)
+  assert.equal(valid.connectionType, 'entrance')
+  assert.equal(valid.connectionGroup, 'MainGate')
+
+  for (const value of ['elevator', 'bridge', 'doorway', 'mainGate', 'entrances']) {
+    const result = normalizeBuildingConnectionFields(value, 'G')
+    assert.equal(result.error, 'Unsupported building connection type.')
+    assert.equal(result.connectionType, value)
+  }
+
+  assert.equal(normalizeBuildingConnectionFields('', 'G').error, 'Building connection type and group are required.')
+  assert.equal(normalizeBuildingConnectionFields(undefined, 'G').error, 'Building connection type and group are required.')
+  assert.equal(normalizeBuildingConnectionFields('entrance', '   ').error, 'Building connection type and group are required.')
+})
+
+test('accepts exactly one campus layer (no buildingId) and one assigned building floor', () => {
+  assert.equal(entranceFloorsValid('campus', undefined, 'building', 'b1'), true)
+  assert.equal(entranceFloorsValid('building', 'b1', 'campus', undefined), true)
+})
+
+test('rejects campus-campus, building-building, and invalid contexts for entrance', () => {
+  assert.equal(entranceFloorsValid('campus', undefined, 'campus', undefined), false)
+  assert.equal(entranceFloorsValid('building', 'b1', 'building', 'b2'), false)
+  assert.equal(entranceFloorsValid('campus', 'b1', 'building', 'b2'), false)
+  assert.equal(entranceFloorsValid('campus', undefined, 'building', undefined), false)
+  assert.equal(entranceFloorsValid('campus', undefined, 'building', null), false)
+  assert.equal(entranceFloorsValid('campus', undefined, 'building', ''), false)
+})
+
+test('requires matching entrance types and non-empty matching groups', () => {
+  assert.equal(entranceEndpointsMatch('entrance', 'entrance', 'G', 'G'), true)
+  assert.equal(entranceEndpointsMatch('entrance', 'entrance', '  G  ', 'G'), true)
+  assert.equal(entranceEndpointsMatch('entrance', 'entrance', 'G', 'H'), false)
+  assert.equal(entranceEndpointsMatch('entrance', 'entrance', '', 'G'), false)
+  assert.equal(entranceEndpointsMatch('entrance', 'entrance', '   ', '   '), false)
+  assert.equal(entranceEndpointsMatch('entrance', 'entrance', undefined, undefined), false)
+})
+
+test('entrance and skywalk types do not mix', () => {
+  assert.equal(entranceEndpointsMatch('entrance', 'skywalk', 'G', 'G'), false)
+  assert.equal(entranceEndpointsMatch('skywalk', 'entrance', 'G', 'G'), false)
+  assert.equal(entranceEndpointsMatch('skywalk', 'skywalk', 'G', 'G'), false)
+})
+
+test('entrance buildingConnection nodes validate with the required fields', async () => {
+  await assert.rejects(
+    new Node({ name: 'E1', type: 'buildingConnection', x: 0, y: 0, floorId: FLOOR_ID }).validate(),
+  )
+  await assert.doesNotReject(
+    new Node({
+      name: 'E2',
+      type: 'buildingConnection',
+      connectionType: 'entrance',
+      connectionGroup: 'MainGate',
+      x: 0,
+      y: 0,
+      floorId: FLOOR_ID,
+    }).validate(),
   )
 })

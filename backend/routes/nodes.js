@@ -35,17 +35,39 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: fields.error })
     }
 
-    if (floor.context !== 'building' || !floor.buildingId) {
-      return res.status(400).json({
-        message: 'Building connection nodes must belong to an assigned building floor.',
-      })
-    }
+    const isCampusFloor = floor.context === 'campus' && !floor.buildingId
+    const isBuildingFloor = floor.context === 'building' && Boolean(floor.buildingId)
 
-    const building = await Building.findById(floor.buildingId)
-    if (!building) {
-      return res.status(400).json({
-        message: 'Building connection nodes must belong to an existing building.',
-      })
+    // Entrance connectors join the campus ground map to an assigned building
+    // floor, so either an unassigned campus floor or a building floor is valid.
+    if (connectionType === 'entrance') {
+      if (!isCampusFloor && !isBuildingFloor) {
+        return res.status(400).json({
+          message: 'Entrance nodes must belong to a campus map or an assigned building floor.',
+        })
+      }
+
+      if (isBuildingFloor) {
+        const building = await Building.findById(floor.buildingId)
+        if (!building) {
+          return res.status(400).json({
+            message: 'Entrance nodes on a building floor must belong to an existing building.',
+          })
+        }
+      }
+    } else {
+      if (!isBuildingFloor) {
+        return res.status(400).json({
+          message: 'Building connection nodes must belong to an assigned building floor.',
+        })
+      }
+
+      const building = await Building.findById(floor.buildingId)
+      if (!building) {
+        return res.status(400).json({
+          message: 'Building connection nodes must belong to an existing building.',
+        })
+      }
     }
   }
 

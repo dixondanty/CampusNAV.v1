@@ -16,8 +16,8 @@ Authentication is a presentation-only browser demo using the accounts below. It 
 
 | Role | Username | Password |
 | --- | --- | --- |
-| Admin | `admin` | `admin123` |
-| User | `user` | `user123` |
+| Admin | `admin` | `admin_campusnav123` |
+| User | `user` | `user@123nav` |
 
 ## Run the frontend
 
@@ -42,3 +42,33 @@ npm start
 ```
 
 The API listens on port 5000 by default. Its health endpoint is `http://localhost:5000/api/health`.
+
+## Run the tests
+
+The test suite is database-free: it never connects to MongoDB and never starts the server, so it can run without any setup.
+
+```powershell
+cd backend
+npm test
+```
+
+`npm test` runs the Node.js built-in test runner (`node --test`) over:
+
+- `services/dijkstra.test.js` — shortest-path behavior, edge traversal, and invalid weight handling.
+- `services/validation.test.js` — building-connection fields, same-floor allow-list, skywalk cross-building rules, stair connection rules, and node schema validation.
+
+The suite currently reports 27 passing tests. Test files use `node:test` and `node:assert/strict` only, with no test framework or extra dependency.
+
+### Not covered by the suite
+
+Because the suite is database-free, it does not exercise HTTP routes end to end. These paths are verified by inspection only and still need a database to run:
+
+- Floor and building lookups against real documents (including missing-floor/missing-building paths).
+- Connection persistence via `Connection.create` and the duplicate-edge `409` response.
+- Full `GET /api/navigation/path` requests.
+
+### Known limitations
+
+- The duplicate-edge check is a non-atomic read-then-write; there is no unique index to prevent a race between concurrent requests.
+- Floor deletion relies on a multi-document transaction and fails closed with `500` if the MongoDB deployment does not support transactions (for example, a standalone server).
+- Floor deletion collects node IDs outside the transaction while deleting nodes inside it, so a node added mid-delete could leave an orphan connection.
