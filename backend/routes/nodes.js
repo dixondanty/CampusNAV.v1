@@ -3,6 +3,7 @@ const Connection = require('../models/Connection')
 const Building = require('../models/Building')
 const Floor = require('../models/Floor')
 const Node = require('../models/Node')
+const { normalizeBuildingConnectionFields } = require('../services/validation')
 
 const router = express.Router()
 
@@ -15,27 +16,23 @@ router.post('/', async (req, res) => {
   let connectionType
   let connectionGroup
 
+  // Every node must reference an existing floor; load it once and reuse it
+  // for the type-specific validation below.
+  const floor = await Floor.findById(req.body.floorId)
+  if (!floor) {
+    return res.status(404).json({ message: 'Floor not found.' })
+  }
+
   if (req.body.type === 'buildingConnection') {
-    connectionType = typeof req.body.connectionType === 'string'
-      ? req.body.connectionType.trim()
-      : ''
-    connectionGroup = typeof req.body.connectionGroup === 'string'
-      ? req.body.connectionGroup.trim()
-      : ''
+    const fields = normalizeBuildingConnectionFields(
+      req.body.connectionType,
+      req.body.connectionGroup,
+    )
+    connectionType = fields.connectionType
+    connectionGroup = fields.connectionGroup
 
-    if (!connectionType || !connectionGroup) {
-      return res.status(400).json({
-        message: 'Building connection type and group are required.',
-      })
-    }
-
-    if (connectionType !== 'skywalk') {
-      return res.status(400).json({ message: 'Unsupported building connection type.' })
-    }
-
-    const floor = await Floor.findById(req.body.floorId)
-    if (!floor) {
-      return res.status(404).json({ message: 'Floor not found.' })
+    if (fields.error) {
+      return res.status(400).json({ message: fields.error })
     }
 
     if (floor.context !== 'building' || !floor.buildingId) {
@@ -65,12 +62,17 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'Stair group must be text.' })
     }
 
-    const floor = await Floor.findById(req.body.floorId)
-    if (!floor) {
-      return res.status(404).json({ message: 'Floor not found.' })
+    // Stairs exist only inside a building. Campus ground-map floors carry no
+    // buildingId, so they do not support stair nodes.
+    if (!floor.buildingId) {
+      return res.status(400).json({
+        message: 'Stair nodes can only be placed on floors assigned to a building.',
+      })
     }
 
-    const floors = await Floor.find().select('floorNumber')
+    // Compute the stair boundaries using only this building's floors, so other
+    // buildings and the Campus Ground Map can never affect the min/max.
+    const floors = await Floor.find({ buildingId: floor.buildingId }).select('floorNumber')
     const floorNumbers = floors.map((item) => item.floorNumber)
     const lowestFloor = Math.min(...floorNumbers)
     const highestFloor = Math.max(...floorNumbers)

@@ -4,6 +4,16 @@ const Connection = require('../models/Connection')
 const Building = require('../models/Building')
 const Floor = require('../models/Floor')
 const Node = require('../models/Node')
+const {
+  isSameFloorConnectionAllowed,
+  isSkywalkEndpointPair,
+  skywalkFloorsValid,
+  shareSameBuildingId,
+  skywalkEndpointsMatch,
+  isValidCrossBuildingDistance,
+  stairConnectionMatches,
+  resolveConnectionDistance,
+} = require('../services/validation')
 
 const router = express.Router()
 
@@ -62,27 +72,14 @@ router.post('/', async (req, res) => {
   let distance
 
   if (sameFloor) {
-    const bothNavigation = fromNode.type === 'nav' && toNode.type === 'nav'
-    const roomNavigation =
-      (fromNode.type === 'room' && toNode.type === 'nav') ||
-      (fromNode.type === 'nav' && toNode.type === 'room')
-    const navigationStair =
-      (fromNode.type === 'nav' && toIsStair) ||
-      (toNode.type === 'nav' && fromIsStair)
-    const navigationBuildingConnection =
-      (fromNode.type === 'nav' && toIsBuildingConnection) ||
-      (toNode.type === 'nav' && fromIsBuildingConnection)
-    const oppositeStairParts =
-      fromIsStair && toIsStair && fromNode.stairPart !== toNode.stairPart
-
-    if (!(bothNavigation || roomNavigation || navigationStair || navigationBuildingConnection || oppositeStairParts)) {
+    if (!isSameFloorConnectionAllowed(fromNode.type, toNode.type, fromNode.stairPart, toNode.stairPart)) {
       return res.status(400).json({
         message: 'Connect navigation nodes to nodes, rooms, stairs, or building connections; stairs may also connect to the other stair part.',
       })
     }
   } else {
     if (fromIsBuildingConnection || toIsBuildingConnection) {
-      if (!fromIsBuildingConnection || !toIsBuildingConnection) {
+      if (!isSkywalkEndpointPair(fromNode.type, toNode.type)) {
         return res.status(400).json({
           message: 'Building connections can connect across buildings only to other building connection nodes.',
         })
@@ -99,12 +96,7 @@ router.post('/', async (req, res) => {
         })
       }
 
-      if (
-        fromFloor.context !== 'building' ||
-        toFloor.context !== 'building' ||
-        !fromFloor.buildingId ||
-        !toFloor.buildingId
-      ) {
+      if (!skywalkFloorsValid(fromFloor.context, fromFloor.buildingId, toFloor.context, toFloor.buildingId)) {
         return res.status(400).json({
           message: 'Skywalk endpoints must belong to assigned building floors.',
         })
@@ -121,35 +113,26 @@ router.post('/', async (req, res) => {
         })
       }
 
-      if (fromBuilding._id.equals(toBuilding._id)) {
+      if (shareSameBuildingId(fromBuilding._id, toBuilding._id)) {
         return res.status(400).json({
           message: 'Building connections cannot connect floors in the same building.',
         })
       }
 
-      const fromConnectionGroup = typeof fromNode.connectionGroup === 'string'
-        ? fromNode.connectionGroup.trim()
-        : ''
-      const toConnectionGroup = typeof toNode.connectionGroup === 'string'
-        ? toNode.connectionGroup.trim()
-        : ''
-
       if (
-        fromNode.connectionType !== 'skywalk' ||
-        toNode.connectionType !== 'skywalk' ||
-        !fromConnectionGroup ||
-        fromConnectionGroup !== toConnectionGroup
+        !skywalkEndpointsMatch(
+          fromNode.connectionType,
+          toNode.connectionType,
+          fromNode.connectionGroup,
+          toNode.connectionGroup,
+        )
       ) {
         return res.status(400).json({
           message: 'Skywalk endpoints must have the same connection type and group.',
         })
       }
 
-      if (
-        typeof req.body.distance !== 'number' ||
-        !Number.isFinite(req.body.distance) ||
-        req.body.distance < 0
-      ) {
+      if (!isValidCrossBuildingDistance(req.body.distance)) {
         return res.status(400).json({
           message: 'A finite, non-negative distance is required for cross-building connections.',
         })
@@ -168,6 +151,14 @@ router.post('/', async (req, res) => {
         return res.status(400).json({ message: 'Both stair nodes must belong to existing floors.' })
       }
 
+      // Stairs only span floors of the same building; never link staircases
+      // across separate buildings or between a building and the campus map.
+      if (!shareSameBuildingId(fromFloor.buildingId, toFloor.buildingId)) {
+        return res.status(400).json({
+          message: 'Cross-floor stair connections must belong to the same building.',
+        })
+      }
+
       const lowerNode = fromFloor.floorNumber < toFloor.floorNumber ? fromNode : toNode
       const upperNode = lowerNode === fromNode ? toNode : fromNode
       const lowerFloor = lowerNode === fromNode ? fromFloor : toFloor
@@ -180,10 +171,14 @@ router.post('/', async (req, res) => {
         : ''
 
       if (
-        upperFloor.floorNumber - lowerFloor.floorNumber !== 1 ||
-        lowerNode.stairPart !== 2 ||
-        upperNode.stairPart !== 1 ||
-        lowerStairGroup !== upperStairGroup
+        !stairConnectionMatches(
+          upperFloor.floorNumber,
+          lowerFloor.floorNumber,
+          lowerNode.stairPart,
+          upperNode.stairPart,
+          lowerStairGroup,
+          upperStairGroup,
+        )
       ) {
         return res.status(400).json({
           message: 'Connect matching stair groups: Part 2 on a floor to Part 1 on the immediately higher floor.',
@@ -205,12 +200,13 @@ router.post('/', async (req, res) => {
     return res.status(409).json({ message: 'These nodes are already connected.' })
   }
 
-  if (distance === undefined) {
-    distance = Math.sqrt(
-      Math.pow(connectionToNode.x - connectionFromNode.x, 2) +
-        Math.pow(connectionToNode.y - connectionFromNode.y, 2),
-    )
-  }
+  distance = resolveConnectionDistance(
+    distance,
+    connectionFromNode.x,
+    connectionFromNode.y,
+    connectionToNode.x,
+    connectionToNode.y,
+  )
 
   const connection = await Connection.create({
     from: connectionFromNode._id,
