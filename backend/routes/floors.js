@@ -4,6 +4,8 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 const Building = require('../models/Building')
 const Floor = require('../models/Floor')
+const Node = require('../models/Node')
+const Connection = require('../models/Connection')
 
 const router = express.Router()
 const upload = multer({
@@ -65,9 +67,57 @@ router.post('/', upload.single('mapImage'), async (req, res) => {
 })
 
 router.delete('/:id', async (req, res) => {
-  const floor = await Floor.findByIdAndDelete(req.params.id)
+  const floorId = req.params.id
+
+  // Verify the floor exists before attempting any deletion.
+  const floor = await Floor.findById(floorId)
   if (!floor) {
     return res.status(404).json({ message: 'Floor not found.' })
+  }
+
+  // Collect the IDs of every node on this floor so we can scope all deletes
+  // precisely — never touching nodes or connections from other floors.
+  const nodes = await Node.find({ floorId }).select('_id')
+  const nodeIds = nodes.map((n) => n._id)
+
+  // Build the connection filter once for the transaction's scoped deletes.
+  const connectionFilter = nodeIds.length > 0
+    ? { $or: [{ from: { $in: nodeIds } }, { to: { $in: nodeIds } }] }
+    : null
+
+  // ── Delete atomically via a MongoDB session/transaction ─────────────────────
+  // Multi-document transactions require a replica set or mongos (MongoDB Atlas
+  // qualifies).  All three deletes run inside a single transaction and are
+  // committed only after every one succeeds, so a mid-sequence failure rolls
+  // back automatically and the database is never left partially deleted.
+  //
+  // If transactions are unavailable or any operation fails, the transaction is
+  // aborted (when appropriate) and the error propagates to the Express error
+  // handler.  The deletion is never retried outside the transaction and no
+  // success is reported.
+  let session = null
+  try {
+    session = await Floor.db.client.startSession()
+    session.startTransaction()
+
+    if (connectionFilter) {
+      await Connection.deleteMany(connectionFilter, { session })
+      await Node.deleteMany({ floorId }, { session })
+    }
+    await floor.deleteOne({ session })
+
+    await session.commitTransaction()
+  } catch (txError) {
+    // Roll back any work in the failed transaction, then re-throw for Express
+    // 5's global error handler (which returns HTTP 500).
+    if (session && session.inTransaction()) {
+      await session.abortTransaction()
+    }
+    throw txError
+  } finally {
+    if (session) {
+      session.endSession()
+    }
   }
 
   res.json({ message: 'Floor deleted.' })
