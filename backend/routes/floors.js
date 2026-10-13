@@ -6,6 +6,7 @@ const Building = require('../models/Building')
 const Floor = require('../models/Floor')
 const Node = require('../models/Node')
 const Connection = require('../models/Connection')
+const TeacherCabin = require('../models/TeacherCabin')
 
 const router = express.Router()
 const upload = multer({
@@ -109,6 +110,12 @@ router.delete('/:id', async (req, res) => {
       await Connection.deleteMany(connectionFilter, { session })
       await Node.deleteMany({ floorId }, { session })
     }
+    // Remove teacher cabins on this floor or linked to a staffroom on it so no
+    // cabin is left referencing a deleted floor or room.
+    const cabinFilter = nodeIds.length > 0
+      ? { $or: [{ floorId }, { staffroomRoomId: { $in: nodeIds } }] }
+      : { floorId }
+    await TeacherCabin.deleteMany(cabinFilter, { session })
     await floor.deleteOne({ session })
 
     await session.commitTransaction()

@@ -3,6 +3,7 @@ const Connection = require('../models/Connection')
 const Building = require('../models/Building')
 const Floor = require('../models/Floor')
 const Node = require('../models/Node')
+const TeacherCabin = require('../models/TeacherCabin')
 const { normalizeBuildingConnectionFields } = require('../services/validation')
 
 const router = express.Router()
@@ -151,6 +152,8 @@ router.delete('/:id', async (req, res) => {
   await Connection.deleteMany({
     $or: [{ from: node._id }, { to: node._id }],
   })
+  // Cabins pointing at a deleted staffroom would otherwise be unreachable.
+  await TeacherCabin.deleteMany({ staffroomRoomId: node._id })
   await node.deleteOne()
 
   res.json({ message: 'Node deleted.' })

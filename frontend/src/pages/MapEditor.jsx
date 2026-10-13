@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx'
 import buildRouteSegments from '../utils/buildRouteSegments.js'
@@ -8,6 +8,44 @@ const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const API_URL = `${SERVER_URL}/api`
 const PROTECTED_BUILDING_ID = '6ac7e6d91280162920d68aa7'
 const CAMPUS_SELECTION_ID = '__campus__'
+const MIN_LEFT_PANEL = 200
+const MIN_RIGHT_PANEL = 240
+const MIN_CENTER_PANEL = 320
+const PANEL_RAIL_WIDTH = 20
+const PANEL_DIVIDER_WIDTH = 16
+const STACK_BREAKPOINT = 640
+const DEFAULT_LEFT_PANEL_WIDTH = 280
+const DEFAULT_RIGHT_PANEL_WIDTH = 340
+const MAX_PANEL_WIDTH = 900
+const LEFT_PANEL_WIDTH_KEY = 'campusnav.leftPanelWidth.v2'
+const RIGHT_PANEL_WIDTH_KEY = 'campusnav.rightPanelWidth.v2'
+const LEFT_PANEL_COLLAPSED_KEY = 'campusnav.leftPanelCollapsed.v2'
+const RIGHT_PANEL_COLLAPSED_KEY = 'campusnav.rightPanelCollapsed.v2'
+
+function clampPanelWidth(value, min, max) {
+  return Math.max(min, Math.min(max, Math.round(value)))
+}
+
+function readStoredPanelNumber(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key)
+    if (raw === null) return fallback
+    const number = Number(raw)
+    return Number.isFinite(number) ? number : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function readStoredPanelBool(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key)
+    if (raw === null) return fallback
+    return raw === 'true'
+  } catch {
+    return fallback
+  }
+}
 
 async function readResponse(response) {
   const data = await response.json()
@@ -35,6 +73,7 @@ function MapEditor() {
   const [nodes, setNodes] = useState([])
   const [allStairNodes, setAllStairNodes] = useState([])
   const [allTestNodes, setAllTestNodes] = useState([])
+  const [allTestCabins, setAllTestCabins] = useState([])
   const [connections, setConnections] = useState([])
   const [selectedNodeId, setSelectedNodeId] = useState('')
   const [editingRoomName, setEditingRoomName] = useState(false)
@@ -50,6 +89,13 @@ function MapEditor() {
   const [entranceName, setEntranceName] = useState('')
   const [entranceGroup, setEntranceGroup] = useState('')
   const [savingEntrance, setSavingEntrance] = useState(false)
+  const [cabins, setCabins] = useState([])
+  const [cabinPosition, setCabinPosition] = useState(null)
+  const [cabinName, setCabinName] = useState('')
+  const [cabinTeacher, setCabinTeacher] = useState('')
+  const [cabinStaffroomId, setCabinStaffroomId] = useState('')
+  const [editingCabinId, setEditingCabinId] = useState('')
+  const [savingCabin, setSavingCabin] = useState(false)
   const [remoteBuildingConnectionNodes, setRemoteBuildingConnectionNodes] = useState([])
   const [crossMapPair, setCrossMapPair] = useState(null)
   const [crossMapDistance, setCrossMapDistance] = useState('')
@@ -79,6 +125,224 @@ function MapEditor() {
   const navigate = useNavigate()
   const mapImageRef = useRef(null)
   const creatingNodeRef = useRef(false)
+  const layoutRef = useRef(null)
+  const [leftPanelWidth, setLeftPanelWidth] = useState(() =>
+    clampPanelWidth(readStoredPanelNumber(LEFT_PANEL_WIDTH_KEY, DEFAULT_LEFT_PANEL_WIDTH), MIN_LEFT_PANEL, MAX_PANEL_WIDTH)
+  )
+  const [rightPanelWidth, setRightPanelWidth] = useState(() =>
+    clampPanelWidth(readStoredPanelNumber(RIGHT_PANEL_WIDTH_KEY, DEFAULT_RIGHT_PANEL_WIDTH), MIN_RIGHT_PANEL, MAX_PANEL_WIDTH)
+  )
+  const [leftCollapsed, setLeftCollapsed] = useState(() =>
+    readStoredPanelBool(LEFT_PANEL_COLLAPSED_KEY, false)
+  )
+  const [rightCollapsed, setRightCollapsed] = useState(() =>
+    readStoredPanelBool(RIGHT_PANEL_COLLAPSED_KEY, false)
+  )
+  const panelStateRef = useRef({ leftPanelWidth, rightPanelWidth, leftCollapsed, rightCollapsed })
+  const autoCollapsedRef = useRef({ left: false, right: false })
+
+  useEffect(() => {
+    panelStateRef.current = { leftPanelWidth, rightPanelWidth, leftCollapsed, rightCollapsed }
+  }, [leftPanelWidth, rightPanelWidth, leftCollapsed, rightCollapsed])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LEFT_PANEL_WIDTH_KEY, String(leftPanelWidth))
+    } catch {}
+  }, [leftPanelWidth])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(RIGHT_PANEL_WIDTH_KEY, String(rightPanelWidth))
+    } catch {}
+  }, [rightPanelWidth])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LEFT_PANEL_COLLAPSED_KEY, String(leftCollapsed))
+    } catch {}
+  }, [leftCollapsed])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(RIGHT_PANEL_COLLAPSED_KEY, String(rightCollapsed))
+    } catch {}
+  }, [rightCollapsed])
+
+  useLayoutEffect(() => {
+    const layoutEl = layoutRef.current
+    if (!layoutEl) return undefined
+
+    function fitPanelsToContainer() {
+      const width = layoutEl.clientWidth
+      if (!width) return
+      const { leftPanelWidth: leftWidth, rightPanelWidth: rightWidth } = panelStateRef.current
+
+      if (width <= STACK_BREAKPOINT) {
+        autoCollapsedRef.current.left = false
+        autoCollapsedRef.current.right = false
+        setLeftCollapsed(false)
+        setRightCollapsed(false)
+        return
+      }
+
+      const bothFit = width >= MIN_LEFT_PANEL + MIN_RIGHT_PANEL + MIN_CENTER_PANEL + 2 * PANEL_DIVIDER_WIDTH
+      const rightFitsWithRail =
+        width >= PANEL_RAIL_WIDTH + MIN_RIGHT_PANEL + MIN_CENTER_PANEL + 2 * PANEL_DIVIDER_WIDTH
+
+      if (!bothFit) {
+        if (!panelStateRef.current.leftCollapsed) {
+          autoCollapsedRef.current.left = true
+          setLeftCollapsed(true)
+        }
+      } else if (autoCollapsedRef.current.left) {
+        autoCollapsedRef.current.left = false
+        setLeftCollapsed(false)
+      }
+
+      if (!rightFitsWithRail) {
+        if (!panelStateRef.current.rightCollapsed) {
+          autoCollapsedRef.current.right = true
+          setRightCollapsed(true)
+        }
+      } else if (autoCollapsedRef.current.right) {
+        autoCollapsedRef.current.right = false
+        setRightCollapsed(false)
+      }
+
+      if (bothFit && rightFitsWithRail) {
+        const available = width - 2 * PANEL_DIVIDER_WIDTH - MIN_CENTER_PANEL
+        if (leftWidth + rightWidth > available) {
+          let overflow = leftWidth + rightWidth - available
+          let nextLeft = leftWidth
+          let nextRight = rightWidth
+          const leftCut = Math.min(overflow, Math.max(0, nextLeft - MIN_LEFT_PANEL))
+          nextLeft -= leftCut
+          overflow -= leftCut
+          const rightCut = Math.min(overflow, Math.max(0, nextRight - MIN_RIGHT_PANEL))
+          nextRight -= rightCut
+          setLeftPanelWidth(Math.round(nextLeft))
+          setRightPanelWidth(Math.round(nextRight))
+        }
+      }
+    }
+
+    fitPanelsToContainer()
+
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(fitPanelsToContainer)
+    observer.observe(layoutEl)
+    return () => observer.disconnect()
+  }, [])
+
+  function containerWidth() {
+    return layoutRef.current?.clientWidth || 0
+  }
+
+  function maxLeftPanelWidth() {
+    const { rightPanelWidth: rightWidth, rightCollapsed: isRightCollapsed } = panelStateRef.current
+    const otherWidth = isRightCollapsed ? PANEL_RAIL_WIDTH : rightWidth
+    return Math.max(
+      MIN_LEFT_PANEL,
+      containerWidth() - 2 * PANEL_DIVIDER_WIDTH - MIN_CENTER_PANEL - otherWidth
+    )
+  }
+
+  function maxRightPanelWidth() {
+    const { leftPanelWidth: leftWidth, leftCollapsed: isLeftCollapsed } = panelStateRef.current
+    const otherWidth = isLeftCollapsed ? PANEL_RAIL_WIDTH : leftWidth
+    return Math.max(
+      MIN_RIGHT_PANEL,
+      containerWidth() - 2 * PANEL_DIVIDER_WIDTH - MIN_CENTER_PANEL - otherWidth
+    )
+  }
+
+  function startPanelResize(panel, pointerEvent) {
+    pointerEvent.preventDefault()
+    const startX = pointerEvent.clientX
+    const startLeft = leftPanelWidth
+    const startRight = rightPanelWidth
+    const divider = pointerEvent.currentTarget
+
+    if (typeof divider.setPointerCapture === 'function') {
+      try {
+        divider.setPointerCapture(pointerEvent.pointerId)
+      } catch {}
+    }
+    document.body.classList.add('panel-resizing')
+
+    function handlePointerMove(moveEvent) {
+      const delta = moveEvent.clientX - startX
+      if (panel === 'left') {
+        setLeftPanelWidth(clampPanelWidth(startLeft + delta, MIN_LEFT_PANEL, maxLeftPanelWidth()))
+      } else {
+        setRightPanelWidth(clampPanelWidth(startRight - delta, MIN_RIGHT_PANEL, maxRightPanelWidth()))
+      }
+    }
+
+    function handlePointerEnd() {
+      if (
+        typeof divider.hasPointerCapture === 'function' &&
+        divider.hasPointerCapture(pointerEvent.pointerId)
+      ) {
+        divider.releasePointerCapture(pointerEvent.pointerId)
+      }
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerEnd)
+      window.removeEventListener('pointercancel', handlePointerEnd)
+      document.body.classList.remove('panel-resizing')
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerEnd)
+    window.addEventListener('pointercancel', handlePointerEnd)
+  }
+
+  function handleDividerKeyDown(panel, event) {
+    const key = event.key
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(key)) return
+    event.preventDefault()
+    if (key === 'Home') {
+      if (panel === 'left') setLeftPanelWidth(MIN_LEFT_PANEL)
+      else setRightPanelWidth(MIN_RIGHT_PANEL)
+      return
+    }
+    if (key === 'End') {
+      if (panel === 'left') setLeftPanelWidth(maxLeftPanelWidth())
+      else setRightPanelWidth(maxRightPanelWidth())
+      return
+    }
+    const step = event.shiftKey ? 32 : 16
+    const direction = key === 'ArrowLeft' ? -step : step
+    if (panel === 'left') {
+      setLeftPanelWidth(clampPanelWidth(leftPanelWidth + direction, MIN_LEFT_PANEL, maxLeftPanelWidth()))
+    } else {
+      setRightPanelWidth(clampPanelWidth(rightPanelWidth - direction, MIN_RIGHT_PANEL, maxRightPanelWidth()))
+    }
+  }
+
+  function collapseLeftPanel() {
+    autoCollapsedRef.current.left = false
+    setLeftCollapsed(true)
+  }
+
+  function collapseRightPanel() {
+    autoCollapsedRef.current.right = false
+    setRightCollapsed(true)
+  }
+
+  function expandLeftPanel() {
+    autoCollapsedRef.current.left = false
+    setLeftPanelWidth((width) => clampPanelWidth(width, MIN_LEFT_PANEL, maxLeftPanelWidth()))
+    setLeftCollapsed(false)
+  }
+
+  function expandRightPanel() {
+    autoCollapsedRef.current.right = false
+    setRightPanelWidth((width) => clampPanelWidth(width, MIN_RIGHT_PANEL, maxRightPanelWidth()))
+    setRightCollapsed(false)
+  }
+
   const floors = useMemo(
     () => floorRecords.filter((floor) => (
       selectedBuildingId === CAMPUS_SELECTION_ID
@@ -127,7 +391,16 @@ function MapEditor() {
         displayLabel: `${node.name} — ${connectorType}${connectorGroup ? ` · ${connectorGroup}` : ''}`,
       }
     })
-  const testNodeGroups = groupNodesByFloor(testNodes, testGroupFloors)
+  const testCabinNodes = allTestCabins.map((cabin) => ({
+    _id: `cabin-${cabin._id}`,
+    name: cabin.teacherName,
+    displayLabel: `${cabin.teacherName} — ${cabin.name}${cabin.staffroomName ? ` (${cabin.staffroomName})` : ''}`,
+    floorId: String(cabin.floorId?._id || cabin.floorId),
+    floorName: cabin.floorName,
+    destinationNodeId: cabin.destinationNodeId,
+    cabin: true,
+  }))
+  const testNodeGroups = groupNodesByFloor([...testNodes, ...testCabinNodes], testGroupFloors)
   const stairPart2Nodes = allStairNodes.filter((node) => node.stairPart === 2)
   const stairPart1Nodes = allStairNodes.filter((node) => node.stairPart === 1)
   const crossFloorFromNode = stairPart2Nodes.find((node) => node._id === crossFloorFromId)
@@ -193,6 +466,13 @@ function MapEditor() {
   function getNodeFloorId(node) {
     const floorId = node.floorId
     return String(floorId && typeof floorId === 'object' ? floorId._id : floorId)
+  }
+
+  function resolveTestLocationNodeId(value) {
+    if (String(value).startsWith('cabin-')) {
+      return allTestCabins.find((cabin) => `cabin-${cabin._id}` === value)?.destinationNodeId || ''
+    }
+    return value
   }
 
   function isValidObjectId(value) {
@@ -333,6 +613,19 @@ function MapEditor() {
     return floorConnections
   }
 
+  async function refreshCabins(floorId) {
+    const response = await fetch(`${API_URL}/cabins?floorId=${floorId}`)
+    const floorCabins = await readResponse(response)
+    setCabins(floorCabins)
+    setAllTestCabins((currentCabins) => [
+      ...currentCabins.filter(
+        (cabin) => String(cabin.floorId?._id || cabin.floorId) !== String(floorId),
+      ),
+      ...floorCabins,
+    ])
+    return floorCabins
+  }
+
   useEffect(() => {
     async function loadEditorData() {
       try {
@@ -411,23 +704,27 @@ function MapEditor() {
 
     async function loadAllTestNodes() {
       try {
-        const nodeLists = await Promise.all(
-          floorRecords.map(async (floor) => {
-            const response = await fetch(`${API_URL}/nodes/${floor._id}`)
-            const floorNodes = await readResponse(response)
-            return floorNodes
-              .filter((node) => ['nav', 'room', 'stair', 'buildingConnection'].includes(node.type))
-              .map((node) => ({
-                ...node,
-                floorName: floor.name,
-                floorNumber: floor.floorNumber,
-                context: floor.context,
-                buildingId: floor.buildingId?._id || floor.buildingId,
-              }))
-          }),
-        )
+        const [nodeLists, allCabins] = await Promise.all([
+          Promise.all(
+            floorRecords.map(async (floor) => {
+              const response = await fetch(`${API_URL}/nodes/${floor._id}`)
+              const floorNodes = await readResponse(response)
+              return floorNodes
+                .filter((node) => ['nav', 'room', 'stair', 'buildingConnection'].includes(node.type))
+                .map((node) => ({
+                  ...node,
+                  floorName: floor.name,
+                  floorNumber: floor.floorNumber,
+                  context: floor.context,
+                  buildingId: floor.buildingId?._id || floor.buildingId,
+                }))
+            }),
+          ),
+          fetch(`${API_URL}/cabins`).then(readResponse),
+        ])
         if (active) {
           setAllTestNodes(nodeLists.flat())
+          setAllTestCabins(allCabins)
         }
       } catch (loadError) {
         if (active) {
@@ -502,17 +799,25 @@ function MapEditor() {
 
     async function loadFloorData() {
       try {
-        const [nodesResponse, connectionsResponse] = await Promise.all([
+        const [nodesResponse, connectionsResponse, cabinsResponse] = await Promise.all([
           fetch(`${API_URL}/nodes/${selectedFloorId}`),
           fetch(`${API_URL}/connections/${selectedFloorId}`),
+          fetch(`${API_URL}/cabins?floorId=${selectedFloorId}`),
         ])
-        const [floorNodes, floorConnections] = await Promise.all([
+        const [floorNodes, floorConnections, floorCabins] = await Promise.all([
           readResponse(nodesResponse),
           readResponse(connectionsResponse),
+          readResponse(cabinsResponse),
         ])
         if (active) {
           setNodes(floorNodes.filter((node) => ['nav', 'room', 'stair', 'buildingConnection'].includes(node.type)))
           setConnections(floorConnections)
+          setCabins(floorCabins)
+          setCabinPosition(null)
+          setCabinName('')
+          setCabinTeacher('')
+          setCabinStaffroomId('')
+          setEditingCabinId('')
         }
       } catch (loadError) {
         if (active) {
@@ -804,7 +1109,7 @@ function MapEditor() {
   }
 
   async function handleMapClick(event) {
-    if (!['nav', 'room', 'stair', 'entrance'].includes(mode) || !selectedFloor || loadingNodes || creatingNodeRef.current) {
+    if (!['nav', 'room', 'stair', 'entrance', 'cabin'].includes(mode) || !selectedFloor || loadingNodes || creatingNodeRef.current) {
       return
     }
 
@@ -842,6 +1147,19 @@ function MapEditor() {
       setEntrancePosition({ x, y })
       setEntranceName('')
       setEntranceGroup('')
+      setError('')
+      return
+    }
+    if (mode === 'cabin') {
+      if (roomNodes.length === 0) {
+        setError('Add a room on this floor before placing a teacher cabin.')
+        return
+      }
+      setCabinPosition({ x, y })
+      setCabinName('')
+      setCabinTeacher('')
+      setCabinStaffroomId(String(roomNodes[0]._id))
+      setEditingCabinId('')
       setError('')
       return
     }
@@ -1002,6 +1320,87 @@ function MapEditor() {
     } finally {
       creatingNodeRef.current = false
       setSavingEntrance(false)
+    }
+  }
+
+  function handleEditCabin(cabin) {
+    setSelectedNodeId('')
+    setCabinName(cabin.name)
+    setCabinTeacher(cabin.teacherName)
+    setCabinStaffroomId(String(cabin.staffroomRoomId?._id || cabin.staffroomRoomId))
+    setCabinPosition({ x: cabin.x, y: cabin.y })
+    setEditingCabinId(cabin._id)
+    setError('')
+  }
+
+  async function handleSaveCabin(event) {
+    event.preventDefault()
+    const trimmedName = cabinName.trim()
+    const trimmedTeacher = cabinTeacher.trim()
+    if (
+      !selectedFloor ||
+      !cabinPosition ||
+      !trimmedName ||
+      !trimmedTeacher ||
+      !cabinStaffroomId ||
+      savingCabin
+    ) {
+      return
+    }
+
+    setSavingCabin(true)
+    setError('')
+    try {
+      const isEditing = Boolean(editingCabinId)
+      const response = await fetch(
+        isEditing ? `${API_URL}/cabins/${editingCabinId}` : `${API_URL}/cabins`,
+        {
+          method: isEditing ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: trimmedName,
+            teacherName: trimmedTeacher,
+            floorId: selectedFloor._id,
+            staffroomRoomId: cabinStaffroomId,
+            x: cabinPosition.x,
+            y: cabinPosition.y,
+          }),
+        },
+      )
+      await readResponse(response)
+      await refreshCabins(selectedFloor._id)
+      setCabinPosition(null)
+      setCabinName('')
+      setCabinTeacher('')
+      setCabinStaffroomId('')
+      setEditingCabinId('')
+    } catch (saveError) {
+      setError(saveError.message)
+    } finally {
+      setSavingCabin(false)
+    }
+  }
+
+  async function handleDeleteCabin(cabin) {
+    if (!window.confirm(`Delete teacher cabin ${cabin.name} for ${cabin.teacherName}?`)) {
+      return
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/cabins/${cabin._id}`, {
+        method: 'DELETE',
+      })
+      await readResponse(response)
+      if (editingCabinId === cabin._id) {
+        setCabinPosition(null)
+        setEditingCabinId('')
+        setCabinName('')
+        setCabinTeacher('')
+        setCabinStaffroomId('')
+      }
+      await refreshCabins(selectedFloor._id)
+    } catch (deleteError) {
+      setError(deleteError.message)
     }
   }
 
@@ -1354,8 +1753,15 @@ function MapEditor() {
     setRouteMessage('')
     setRouteResult(null)
     try {
+      const resolvedStartNodeId = resolveTestLocationNodeId(startNodeId)
+      const resolvedEndNodeId = resolveTestLocationNodeId(endNodeId)
+      if (!resolvedStartNodeId || !resolvedEndNodeId) {
+        setRouteMessage('A selected teacher cabin cannot be reached from the available maps.')
+        return
+      }
+
       const response = await fetch(
-        `${API_URL}/navigation/path?start=${encodeURIComponent(startNodeId)}&end=${encodeURIComponent(endNodeId)}`,
+        `${API_URL}/navigation/path?start=${encodeURIComponent(resolvedStartNodeId)}&end=${encodeURIComponent(resolvedEndNodeId)}`,
       )
       const result = await readResponse(response)
       if (!result.found) {
@@ -1468,8 +1874,24 @@ function MapEditor() {
 
       {error && <div className="map-editor-error" role="alert">{error}</div>}
 
-      <div className="map-editor-layout">
-        <aside className="editor-sidebar floor-sidebar">
+      <div className="map-editor-layout" ref={layoutRef}>
+        {leftCollapsed ? (
+          <div className="panel-rail">
+            <button
+              aria-label="Expand floors panel"
+              className="panel-toggle-button"
+              onClick={expandLeftPanel}
+              title="Expand floors panel"
+              type="button"
+            >
+              »
+            </button>
+          </div>
+        ) : (
+          <aside
+            className="editor-sidebar floor-sidebar"
+            style={{ '--panel-width': `${leftPanelWidth}px` }}
+          >
           <section className="building-management">
             <label className="building-selector-label" htmlFor="building-selector">
               Building
@@ -1594,6 +2016,27 @@ function MapEditor() {
             <span aria-hidden="true">+</span> Add Floor
           </button>
         </aside>
+        )}
+        <div
+          aria-label="Resize floors panel"
+          aria-orientation="vertical"
+          className="panel-divider"
+          onKeyDown={(event) => handleDividerKeyDown('left', event)}
+          onPointerDown={(event) => startPanelResize('left', event)}
+          role="separator"
+          tabIndex={0}
+        >
+          <button
+            aria-label={leftCollapsed ? 'Expand floors panel' : 'Collapse floors panel'}
+            className="divider-collapse-button"
+            onClick={leftCollapsed ? expandLeftPanel : collapseLeftPanel}
+            onPointerDown={(event) => event.stopPropagation()}
+            title={leftCollapsed ? 'Expand floors panel' : 'Collapse floors panel'}
+            type="button"
+          >
+            {leftCollapsed ? '»' : '«'}
+          </button>
+        </div>
 
         <section className="map-workspace" aria-label="Floor map workspace">
           <div className="workspace-heading">
@@ -1674,6 +2117,20 @@ function MapEditor() {
               Entrance
             </button>
             <button
+              aria-pressed={mode === 'cabin'}
+              className={`tool-button${mode === 'cabin' ? ' is-active' : ''}`}
+              disabled={!selectedFloor?.mapImage || roomNodes.length === 0}
+              onClick={() => {
+                setSelectedNodeId('')
+                setConnectionNodeIds([])
+                setMode((current) => (current === 'cabin' ? 'select' : 'cabin'))
+              }}
+              title={roomNodes.length === 0 ? 'Add a room on this floor before placing a teacher cabin.' : ''}
+              type="button"
+            >
+              Teacher Cabin
+            </button>
+            <button
               aria-pressed={mode === 'connect'}
               className={`tool-button${mode === 'connect' ? ' is-active' : ''}`}
               disabled={nodes.length + remoteStairNodes.length < 2}
@@ -1727,6 +2184,9 @@ function MapEditor() {
           {mode === 'entrance' && selectedFloor && (
             <p className="map-mode-hint">Entrance mode — click on the map, then enter the connector name and connection group</p>
           )}
+          {mode === 'cabin' && selectedFloor && (
+            <p className="map-mode-hint">Teacher Cabin mode — click on the map, then enter the cabin name and teacher name</p>
+          )}
           {mode === 'connect' && selectedFloor && (
             <p className="map-mode-hint">
               {savingConnection
@@ -1742,7 +2202,7 @@ function MapEditor() {
             <p className="map-mode-hint">Delete mode — select a node, then confirm deletion in the editor panel</p>
           )}
 
-          <div className={`map-stage${['nav', 'room', 'stair', 'entrance'].includes(mode) ? ' is-placing' : ''}`}>
+          <div className={`map-stage${['nav', 'room', 'stair', 'entrance', 'cabin'].includes(mode) ? ' is-placing' : ''}`}>
             {selectedFloor ? (
               selectedFloor.mapImage ? (
                 <div className="map-image-holder">
@@ -1818,6 +2278,23 @@ function MapEditor() {
                         </span>
                       </button>
                     ))}
+                    {cabins.map((cabin) => (
+                      <button
+                        aria-label={`Teacher cabin ${cabin.name} for ${cabin.teacherName}`}
+                        aria-pressed={editingCabinId === cabin._id}
+                        className={`map-node-marker cabin-marker${editingCabinId === cabin._id ? ' is-selected' : ''}`}
+                        key={cabin._id}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          handleEditCabin(cabin)
+                        }}
+                        style={{ left: `${cabin.x}%`, top: `${cabin.y}%` }}
+                        type="button"
+                      >
+                        <span className="cabin-marker-pin" />
+                        <span className="cabin-marker-label">{cabin.teacherName}</span>
+                      </button>
+                    ))}
                   </div>
                 </div>
               ) : (
@@ -1831,13 +2308,49 @@ function MapEditor() {
           </div>
         </section>
 
-        <aside className="editor-sidebar properties-sidebar">
+        <div
+          aria-label="Resize properties panel"
+          aria-orientation="vertical"
+          className="panel-divider"
+          onKeyDown={(event) => handleDividerKeyDown('right', event)}
+          onPointerDown={(event) => startPanelResize('right', event)}
+          role="separator"
+          tabIndex={0}
+        >
+          <button
+            aria-label={rightCollapsed ? 'Expand properties panel' : 'Collapse properties panel'}
+            className="divider-collapse-button"
+            onClick={rightCollapsed ? expandRightPanel : collapseRightPanel}
+            onPointerDown={(event) => event.stopPropagation()}
+            title={rightCollapsed ? 'Expand properties panel' : 'Collapse properties panel'}
+            type="button"
+          >
+            {rightCollapsed ? '«' : '»'}
+          </button>
+        </div>
+        {rightCollapsed ? (
+          <div className="panel-rail">
+            <button
+              aria-label="Expand properties panel"
+              className="panel-toggle-button"
+              onClick={expandRightPanel}
+              title="Expand properties panel"
+              type="button"
+            >
+              «
+            </button>
+          </div>
+        ) : (
+          <aside
+            className="editor-sidebar properties-sidebar"
+            style={{ '--panel-width': `${rightPanelWidth}px` }}
+          >
           <div className="sidebar-heading">Editor</div>
           <section className="inspector-section">
             <p className="inspector-label">Mode</p>
             <div className="mode-summary">
-              <span className={`mode-indicator${mode === 'nav' ? ' is-nav' : mode === 'room' ? ' is-room' : mode === 'stair' ? ' is-stair' : mode === 'entrance' ? ' is-entrance' : mode === 'connect' ? ' is-connect' : ''}`} />
-              {mode === 'nav' ? 'Navigation Node' : mode === 'room' ? 'Room' : mode === 'stair' ? 'Stair' : mode === 'entrance' ? 'Entrance' : mode === 'connect' ? 'Connect' : mode === 'test' ? 'Test Navigation' : mode === 'delete' ? 'Delete' : 'Select'}
+              <span className={`mode-indicator${mode === 'nav' ? ' is-nav' : mode === 'room' ? ' is-room' : mode === 'stair' ? ' is-stair' : mode === 'entrance' ? ' is-entrance' : mode === 'cabin' ? ' is-cabin' : mode === 'connect' ? ' is-connect' : ''}`} />
+              {mode === 'nav' ? 'Navigation Node' : mode === 'room' ? 'Room' : mode === 'stair' ? 'Stair' : mode === 'entrance' ? 'Entrance' : mode === 'cabin' ? 'Teacher Cabin' : mode === 'connect' ? 'Connect' : mode === 'test' ? 'Test Navigation' : mode === 'delete' ? 'Delete' : 'Select'}
             </div>
           </section>
 
@@ -2204,6 +2717,45 @@ function MapEditor() {
             )}
           </section>
 
+          <section className="inspector-section">
+            <div className="inspector-section-heading">
+              <p className="inspector-label">Teacher Cabins</p>
+              <span className="node-count">{cabins.length}</span>
+            </div>
+            {loadingNodes ? (
+              <p className="sidebar-message">Loading cabins…</p>
+            ) : cabins.length === 0 ? (
+              <p className="sidebar-message">No teacher cabins on this floor.</p>
+            ) : (
+              <ul className="inspector-node-list">
+                {cabins.map((cabin) => (
+                  <li className="cabin-list-item" key={cabin._id}>
+                    <button
+                      aria-pressed={editingCabinId === cabin._id}
+                      className={`inspector-node${editingCabinId === cabin._id ? ' is-active' : ''}`}
+                      onClick={() => handleEditCabin(cabin)}
+                      type="button"
+                    >
+                      <span className="cabin-list-pin" />
+                      <span className="cabin-list-text">
+                        <strong>{cabin.name}</strong>
+                        <span>{cabin.teacherName}</span>
+                      </span>
+                    </button>
+                    <button
+                      aria-label={`Delete teacher cabin ${cabin.name}`}
+                      className="connection-delete"
+                      onClick={() => handleDeleteCabin(cabin)}
+                      type="button"
+                    >
+                      Delete
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           {selectedNode && (
             <section className="inspector-section selected-node">
               <p className="inspector-label">
@@ -2294,6 +2846,7 @@ function MapEditor() {
             </section>
           )}
         </aside>
+        )}
       </div>
 
       {addingFloor && (
@@ -2699,6 +3252,113 @@ function MapEditor() {
                 </button>
                 <button disabled={savingEntrance} type="submit">
                   {savingEntrance ? 'Saving…' : 'Save Entrance'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+      {cabinPosition && (
+        <div className="modal-backdrop">
+          <section
+            aria-labelledby="cabin-title"
+            aria-modal="true"
+            className="floor-modal room-name-modal"
+            role="dialog"
+          >
+            <div className="modal-heading">
+              <div>
+                <p className="workspace-kicker">TEACHER CABIN</p>
+                <h2 id="cabin-title">
+                  {editingCabinId ? 'Edit teacher cabin' : 'New teacher cabin'}
+                </h2>
+              </div>
+              <button
+                aria-label="Cancel cabin placement"
+                className="modal-close"
+                disabled={savingCabin}
+                onClick={() => {
+                  setCabinPosition(null)
+                  setCabinName('')
+                  setCabinTeacher('')
+                  setCabinStaffroomId('')
+                  setEditingCabinId('')
+                }}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="floor-form" onSubmit={handleSaveCabin}>
+              <label>
+                Cabin name / number
+                <input
+                  autoFocus
+                  onChange={(event) => setCabinName(event.target.value)}
+                  placeholder="e.g. Teachers Office 12"
+                  required
+                  value={cabinName}
+                />
+              </label>
+              <label>
+                Teacher name
+                <input
+                  onChange={(event) => setCabinTeacher(event.target.value)}
+                  placeholder="e.g. Ms. Jane Doe"
+                  required
+                  value={cabinTeacher}
+                />
+              </label>
+              <label>
+                Staffroom
+                <select
+                  onChange={(event) => setCabinStaffroomId(event.target.value)}
+                  required
+                  value={cabinStaffroomId}
+                >
+                  {roomNodes.map((room) => (
+                    <option key={room._id} value={room._id}>{room.name}</option>
+                  ))}
+                </select>
+              </label>
+              <p className="sidebar-message" role="note">
+                The cabin is placed on this floor and linked to its staffroom. Visitors will be routed to the staffroom’s navigation node and can then locate the cabin marker.
+              </p>
+              <div className="modal-actions">
+                {editingCabinId && (
+                  <button
+                    className="modal-delete-button"
+                    disabled={savingCabin}
+                    onClick={() => {
+                      const editingCabin = cabins.find((cabin) => cabin._id === editingCabinId)
+                      if (editingCabin) {
+                        handleDeleteCabin(editingCabin)
+                      }
+                    }}
+                    type="button"
+                  >
+                    Delete Cabin
+                  </button>
+                )}
+                <button
+                  className="modal-cancel"
+                  disabled={savingCabin}
+                  onClick={() => {
+                    setCabinPosition(null)
+                    setCabinName('')
+                    setCabinTeacher('')
+                    setCabinStaffroomId('')
+                    setEditingCabinId('')
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={savingCabin || roomNodes.length === 0}
+                  type="submit"
+                >
+                  {savingCabin ? 'Saving…' : editingCabinId ? 'Save Changes' : 'Save Cabin'}
                 </button>
               </div>
             </form>

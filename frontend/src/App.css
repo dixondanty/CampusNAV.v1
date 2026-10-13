@@ -151,9 +151,13 @@ button:hover {
   --editor-muted: #77828c;
   --editor-ink: #1c2b38;
   --editor-accent: #176b87;
+  display: flex;
   width: 100%;
+  max-width: 100%;
   height: 100vh;
-  min-height: 520px;
+  height: 100dvh;
+  min-width: 0;
+  flex-direction: column;
   overflow: hidden;
   background: var(--editor-bg);
   color: var(--editor-ink);
@@ -162,9 +166,11 @@ button:hover {
 .map-editor-topbar {
   position: relative;
   z-index: 2;
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
   align-items: center;
+  gap: 12px;
   height: 54px;
   padding: 0 18px;
   border-bottom: 1px solid var(--editor-border);
@@ -173,9 +179,10 @@ button:hover {
 
 .topbar-brand {
   display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
   align-items: center;
   gap: 9px;
-  min-width: 0;
   font-size: 0.9rem;
 }
 
@@ -198,20 +205,27 @@ button:hover {
 }
 
 .topbar-title {
+  overflow: hidden;
   color: #4e5d69;
   font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .topbar-current-floor {
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   color: #4e5d69;
   font-size: 0.85rem;
+  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .topbar-logout {
-  justify-self: end;
+  flex: 0 0 auto;
+  margin-left: auto;
   padding: 7px 11px;
   border: 1px solid var(--editor-border);
   background: #ffffff;
@@ -224,16 +238,125 @@ button:hover {
 }
 
 .map-editor-layout {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.map-editor-layout > .editor-sidebar {
+  flex: 0 0 auto;
+  width: var(--panel-width, 280px);
+}
+
+.map-editor-layout > .properties-sidebar {
+  width: var(--panel-width, 340px);
+}
+
+.map-editor-layout > .map-workspace {
+  flex: 1 1 0;
+}
+
+.panel-divider {
+  position: relative;
+  display: flex;
+  flex: 0 0 16px;
+  min-width: 16px;
+  align-items: center;
+  justify-content: center;
+  background: var(--editor-bg);
+  cursor: col-resize;
+  outline: 0;
+  touch-action: none;
+  user-select: none;
+}
+
+.panel-divider::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  content: '';
+  background: transparent;
+  transform: translateX(-50%);
+  transition: background 140ms ease;
+}
+
+.panel-divider:hover::before,
+.panel-divider:focus-visible::before {
+  background: var(--editor-accent);
+}
+
+.divider-collapse-button {
+  position: relative;
+  z-index: 1;
   display: grid;
-  grid-template-columns: clamp(170px, 16vw, 230px) minmax(0, 1fr) clamp(185px, 17vw, 245px);
-  height: calc(100% - 54px);
+  width: 16px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #7a858e;
+  cursor: pointer;
+  font-size: 0.65rem;
+  line-height: 1;
+}
+
+.panel-divider:hover .divider-collapse-button,
+.divider-collapse-button:hover {
+  border-color: var(--editor-border);
+  background: #ffffff;
+  color: var(--editor-accent);
+}
+
+.panel-rail {
+  display: flex;
+  flex: 0 0 20px;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 12px;
+  background: var(--editor-bg);
+}
+
+.panel-toggle-button {
+  display: grid;
+  width: 18px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #5f6b75;
+  cursor: pointer;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.panel-toggle-button:hover {
+  border-color: var(--editor-border);
+  background: #ffffff;
+  color: var(--editor-accent);
+}
+
+body.panel-resizing,
+body.panel-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .editor-sidebar {
   display: flex;
   min-width: 0;
+  min-height: 0;
+  max-width: 100%;
   flex-direction: column;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   background: #ffffff;
 }
 
@@ -359,6 +482,7 @@ button:hover {
 
 .properties-sidebar {
   border-left: 1px solid var(--editor-border);
+  min-height: 0;
 }
 
 .sidebar-heading {
@@ -510,6 +634,7 @@ button:hover {
 
 .workspace-heading {
   display: flex;
+  min-width: 0;
   min-height: 67px;
   align-items: center;
   justify-content: space-between;
@@ -517,6 +642,10 @@ button:hover {
   padding: 9px 18px;
   border-bottom: 1px solid #dce1e5;
   background: #f8f9fa;
+}
+
+.workspace-heading > div {
+  min-width: 0;
 }
 
 .workspace-kicker {
@@ -549,8 +678,10 @@ button:hover {
 
 .map-toolbar {
   display: flex;
+  min-width: 0;
   min-height: 43px;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   padding: 5px 12px;
@@ -786,6 +917,66 @@ button:hover {
   pointer-events: none;
   text-shadow: 0 0 2px #ffffff, 0 0 3px #ffffff;
   transform: translateY(-50%);
+}
+
+.cabin-marker-pin {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border: 1px solid #ffffff;
+  border-radius: 2px;
+  background: #2e7d32;
+  box-shadow: 0 0 0 1px #1b5e20;
+}
+
+.cabin-marker-label {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  color: #1b5e20;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  pointer-events: none;
+  text-shadow: 0 0 2px #ffffff, 0 0 3px #ffffff;
+  transform: translateY(-50%);
+}
+
+.mode-indicator.is-cabin {
+  border-color: #2e7d32;
+  border-radius: 2px 2px 4px 4px;
+  background: #a5d6a7;
+}
+
+.cabin-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cabin-list-item .inspector-node {
+  flex: 1 1 auto;
+}
+
+.cabin-list-pin {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border: 1px solid #ffffff;
+  border-radius: 2px;
+  background: #2e7d32;
+  box-shadow: 0 0 0 1px #1b5e20;
+}
+
+.cabin-list-text {
+  display: grid;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.cabin-list-text span {
+  color: #6b757d;
+  font-size: 0.7rem;
 }
 
 .map-empty-state {
@@ -1610,6 +1801,68 @@ button:hover {
   text-overflow: ellipsis;
 }
 
+.user-cabin-marker {
+  position: absolute;
+  z-index: 2;
+  width: 13px;
+  height: 13px;
+  transform: translate(-50%, -50%);
+}
+
+.user-cabin-marker-pin {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 13px;
+  height: 13px;
+  border: 2px solid #ffffff;
+  border-radius: 3px;
+  background: #2e7d32;
+  box-shadow: 0 0 0 1px rgb(27 94 32 / 60%), 0 1px 4px rgb(23 50 77 / 35%);
+}
+
+.user-cabin-marker.is-start .user-cabin-marker-pin {
+  background: #16834a;
+  box-shadow: 0 0 0 1px rgb(18 90 44 / 60%), 0 1px 4px rgb(23 50 77 / 35%);
+}
+
+.user-cabin-marker.is-destination .user-cabin-marker-pin {
+  background: #c63b36;
+  box-shadow: 0 0 0 1px rgb(132 32 26 / 60%), 0 1px 4px rgb(23 50 77 / 40%);
+}
+
+.user-cabin-marker-label {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  display: grid;
+  gap: 1px;
+  max-width: 180px;
+  padding: 4px 7px;
+  border: 1px solid #dfe6eb;
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgb(23 50 77 / 18%);
+  color: #263b4e;
+  line-height: 1.2;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.user-cabin-marker-label strong {
+  color: #176b87;
+  font-size: 0.56rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.user-cabin-marker-label > span {
+  overflow: hidden;
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
 .user-stair-transition {
   margin: 11px 0 0;
   padding: 9px 11px;
@@ -1780,7 +2033,8 @@ button:hover {
 }
 
 .floor-form input,
-.floor-form textarea {
+.floor-form textarea,
+.floor-form select {
   width: 100%;
   min-width: 0;
   padding: 8px 9px;
@@ -1791,7 +2045,8 @@ button:hover {
 }
 
 .floor-form input:focus,
-.floor-form textarea:focus {
+.floor-form textarea:focus,
+.floor-form select:focus {
   border-color: #176b87;
   outline: 2px solid rgb(23 107 135 / 14%);
 }
@@ -1840,6 +2095,17 @@ button:hover {
   background: #f4f6f7;
 }
 
+.modal-actions .modal-delete-button {
+  margin-right: auto;
+  border: 1px solid #e3caca;
+  background: #fff7f7;
+  color: #9a3434;
+}
+
+.modal-actions .modal-delete-button:hover {
+  background: #fbeeee;
+}
+
 @media (max-width: 480px) {
   .login-card {
     padding: 24px;
@@ -1862,40 +2128,7 @@ button:hover {
   }
 }
 
-@media (max-width: 900px) {
-  .map-editor-layout {
-    grid-template-columns: 150px minmax(0, 1fr);
-  }
-
-  .properties-sidebar {
-    display: grid;
-    grid-column: 1 / -1;
-    grid-template-columns: 130px 1fr minmax(180px, 1fr);
-    min-height: 115px;
-    border-top: 1px solid var(--editor-border);
-    border-left: 0;
-  }
-
-  .properties-sidebar .sidebar-heading,
-  .properties-sidebar .inspector-section {
-    border-right: 1px solid #e7eaed;
-    border-bottom: 0;
-  }
-
-  .map-editor-layout {
-    grid-template-rows: minmax(0, 1fr) auto;
-  }
-
-  .floor-sidebar {
-    grid-row: 1 / 2;
-  }
-
-  .map-workspace {
-    grid-row: 1 / 2;
-  }
-}
-
-@media (max-width: 620px) {
+@media (max-width: 640px) {
   .map-editor {
     height: auto;
     min-height: 100vh;
@@ -1903,7 +2136,6 @@ button:hover {
   }
 
   .map-editor-topbar {
-    grid-template-columns: 1fr auto;
     height: 50px;
     padding: 0 10px;
   }
@@ -1913,17 +2145,28 @@ button:hover {
   }
 
   .map-editor-layout {
-    display: flex;
+    flex-direction: column;
     height: auto;
     min-height: calc(100vh - 50px);
-    flex-direction: column;
   }
 
-  .floor-sidebar {
-    order: 1;
+  .map-editor-layout > .editor-sidebar,
+  .map-editor-layout > .properties-sidebar {
+    flex: 0 0 auto;
+    width: 100%;
+    overflow: visible;
+  }
+
+  .map-editor-layout > .floor-sidebar {
     max-height: 190px;
+    overflow-y: auto;
     border-right: 0;
     border-bottom: 1px solid var(--editor-border);
+  }
+
+  .panel-divider,
+  .panel-rail {
+    display: none;
   }
 
   .floor-list {
@@ -1944,7 +2187,6 @@ button:hover {
   }
 
   .map-workspace {
-    order: 2;
     min-height: 65vh;
   }
 
@@ -1953,16 +2195,8 @@ button:hover {
   }
 
   .properties-sidebar {
-    display: flex;
-    order: 3;
-    min-height: 0;
     border-top: 1px solid var(--editor-border);
-  }
-
-  .properties-sidebar .sidebar-heading,
-  .properties-sidebar .inspector-section {
-    border-right: 0;
-    border-bottom: 1px solid #e7eaed;
+    border-left: 0;
   }
 
   .map-stage {

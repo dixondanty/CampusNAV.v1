@@ -31,6 +31,7 @@ function loadRoomsBootstrap() {
 
 function UserPage() {
   const [rooms, setRooms] = useState([])
+  const [cabins, setCabins] = useState([])
   const [floors, setFloors] = useState([])
   const [buildings, setBuildings] = useState([])
   const [selectedDisplayFloorId, setSelectedDisplayFloorId] = useState('')
@@ -57,6 +58,7 @@ function UserPage() {
         if (active) {
           setFloors(bootstrap.floors)
           setRooms(bootstrap.rooms)
+          setCabins(bootstrap.cabins || [])
           setBuildings(buildingList)
         }
       } catch (loadError) {
@@ -89,6 +91,31 @@ function UserPage() {
     (first, second) => Number(first.floorNumber) - Number(second.floorNumber),
   )
   const roomGroups = groupNodesByFloor(rooms, floors)
+  const destinationGroups = useMemo(() => {
+    if (cabins.length === 0) {
+      return roomGroups
+    }
+
+    const merged = roomGroups.map((group) => ({ ...group, nodes: [...group.nodes] }))
+    const mergedById = new Map(merged.map((group) => [String(group.id), group]))
+    cabins.forEach((cabin) => {
+      const floorId = String(cabin.floorId?._id || cabin.floorId)
+      const group = mergedById.get(floorId)
+      if (!group) {
+        return
+      }
+      group.nodes.push({
+        _id: `cabin-${cabin._id}`,
+        name: cabin.teacherName,
+        displayLabel: `${cabin.teacherName} · ${cabin.name}${cabin.staffroomName ? ` · ${cabin.staffroomName}` : ''}`,
+        floorId,
+        floorName: cabin.floorName,
+        destinationNodeId: cabin.destinationNodeId,
+        cabin: true,
+      })
+    })
+    return merged
+  }, [cabins, roomGroups])
   const selectedDisplayFloor = displayFloors.find(
     (floor) => String(floor._id) === selectedDisplayFloorId,
   ) || displayFloors[0] || null
@@ -152,6 +179,13 @@ function UserPage() {
     setSelectedDisplayFloorId(displayFloors[0] ? String(displayFloors[0]._id) : '')
   }
 
+  function resolveLocationNodeId(value) {
+    if (String(value).startsWith('cabin-')) {
+      return cabins.find((cabin) => `cabin-${cabin._id}` === value)?.destinationNodeId
+    }
+    return value
+  }
+
   async function handleNavigate(event) {
     event.preventDefault()
     clearRoute()
@@ -167,8 +201,15 @@ function UserPage() {
 
     setNavigating(true)
     try {
+      const resolvedStartNodeId = resolveLocationNodeId(startNodeId)
+      const resolvedEndNodeId = resolveLocationNodeId(endNodeId)
+      if (!resolvedStartNodeId || !resolvedEndNodeId) {
+        setMessage('A selected teacher cabin cannot be reached from the available maps.')
+        return
+      }
+
       const response = await fetch(
-        `${API_URL}/navigation/path?start=${encodeURIComponent(startNodeId)}&end=${encodeURIComponent(endNodeId)}`,
+        `${API_URL}/navigation/path?start=${encodeURIComponent(resolvedStartNodeId)}&end=${encodeURIComponent(resolvedEndNodeId)}`,
       )
       const result = await readResponse(response)
       if (!result.found) {
@@ -231,6 +272,12 @@ function UserPage() {
 
   const selectedStartRoom = rooms.find((room) => String(room._id) === startNodeId)
   const selectedEndRoom = rooms.find((room) => String(room._id) === endNodeId)
+  const selectedStartCabin = String(startNodeId).startsWith('cabin-')
+    ? cabins.find((cabin) => `cabin-${cabin._id}` === startNodeId)
+    : null
+  const selectedEndCabin = String(endNodeId).startsWith('cabin-')
+    ? cabins.find((cabin) => `cabin-${cabin._id}` === endNodeId)
+    : null
   const routeFloorNames = []
   for (const node of routeNodes) {
     const floorId = String(node.floorId)
@@ -249,6 +296,9 @@ function UserPage() {
         { room: selectedEndRoom, label: 'Destination', className: 'is-destination' },
       ].filter((marker) => marker.room && marker.room.floorId === displayFloorId)
     : []
+  const displayFloorCabinMarkers = cabins.filter(
+    (cabin) => String(cabin.floorId?._id || cabin.floorId) === displayFloorId,
+  )
 
   const routeGuidanceSegments = buildRouteSegments(routeNodes)
   const activeRouteGuidanceSegment = routeGuidanceSegments[activeRouteSegmentIndex] || null
@@ -308,12 +358,12 @@ function UserPage() {
               <SearchableLocationSelect
                 ariaLabel="Search starting point"
                 excludedValue={endNodeId}
-                groups={roomGroups}
+                groups={destinationGroups}
                 onChange={(nodeId) => {
                   setStartNodeId(nodeId)
                   clearRoute()
                 }}
-                placeholder="Search room or location..."
+                placeholder="Search room, teacher or location..."
                 value={startNodeId}
               />
             </label>
@@ -323,12 +373,12 @@ function UserPage() {
               <SearchableLocationSelect
                 ariaLabel="Search destination point"
                 excludedValue={startNodeId}
-                groups={roomGroups}
+                groups={destinationGroups}
                 onChange={(nodeId) => {
                   setEndNodeId(nodeId)
                   clearRoute()
                 }}
-                placeholder="Search room or location..."
+                placeholder="Search room, teacher or location..."
                 value={endNodeId}
               />
             </label>
@@ -368,17 +418,21 @@ function UserPage() {
                 <div>
                   <span>Start</span>
                   <strong>
-                    {selectedStartRoom
-                      ? `${selectedStartRoom.name} · ${selectedStartRoom.floorName}`
-                      : ''}
+                    {selectedStartCabin
+                      ? `${selectedStartCabin.teacherName} · ${selectedStartCabin.name}${selectedStartCabin.staffroomName ? ` · ${selectedStartCabin.staffroomName}` : ''} · ${selectedStartCabin.floorName}`
+                      : selectedStartRoom
+                        ? `${selectedStartRoom.name} · ${selectedStartRoom.floorName}`
+                        : ''}
                   </strong>
                 </div>
                 <div>
                   <span>Destination</span>
                   <strong>
-                    {selectedEndRoom
-                      ? `${selectedEndRoom.name} · ${selectedEndRoom.floorName}`
-                      : ''}
+                    {selectedEndCabin
+                      ? `${selectedEndCabin.teacherName} · ${selectedEndCabin.name}${selectedEndCabin.staffroomName ? ` · ${selectedEndCabin.staffroomName}` : ''} · ${selectedEndCabin.floorName}`
+                      : selectedEndRoom
+                        ? `${selectedEndRoom.name} · ${selectedEndRoom.floorName}`
+                        : ''}
                   </strong>
                 </div>
                 <div>
@@ -499,6 +553,26 @@ function UserPage() {
                             </span>
                           </div>
                         ))}
+                        {displayFloorCabinMarkers.map((cabin) => {
+                          const isStart = selectedStartCabin?._id === cabin._id
+                          const isDestination = selectedEndCabin?._id === cabin._id
+                          return (
+                            <div
+                              aria-label={`Teacher cabin: ${cabin.name} for ${cabin.teacherName}`}
+                              className={`user-cabin-marker${isStart ? ' is-start' : ''}${isDestination ? ' is-destination' : ''}`}
+                              key={cabin._id}
+                              role="img"
+                              style={{ left: `${cabin.x}%`, top: `${cabin.y}%` }}
+                            >
+                              <span className="user-cabin-marker-pin" />
+                              <span className="user-cabin-marker-label">
+                                {isStart && <strong>Start</strong>}
+                                {isDestination && <strong>Destination</strong>}
+                                <span>{cabin.teacherName}</span>
+                              </span>
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   ) : (
