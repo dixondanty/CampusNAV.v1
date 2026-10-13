@@ -17,6 +17,9 @@ const STACK_BREAKPOINT = 640
 const DEFAULT_LEFT_PANEL_WIDTH = 280
 const DEFAULT_RIGHT_PANEL_WIDTH = 340
 const MAX_PANEL_WIDTH = 900
+const MIN_MAP_ZOOM = 0.75
+const MAX_MAP_ZOOM = 3
+const MAP_ZOOM_STEP = 0.15
 const LEFT_PANEL_WIDTH_KEY = 'campusnav.leftPanelWidth.v2'
 const RIGHT_PANEL_WIDTH_KEY = 'campusnav.rightPanelWidth.v2'
 const LEFT_PANEL_COLLAPSED_KEY = 'campusnav.leftPanelCollapsed.v2'
@@ -124,6 +127,11 @@ function MapEditor() {
   const [error, setError] = useState('')
   const navigate = useNavigate()
   const mapImageRef = useRef(null)
+  const mapStageRef = useRef(null)
+  const mapPanRef = useRef(null)
+  const mapPanFrameRef = useRef(null)
+  const pendingMapPanRef = useRef(null)
+  const suppressMapClickRef = useRef(false)
   const creatingNodeRef = useRef(false)
   const layoutRef = useRef(null)
   const [leftPanelWidth, setLeftPanelWidth] = useState(() =>
@@ -140,6 +148,9 @@ function MapEditor() {
   )
   const panelStateRef = useRef({ leftPanelWidth, rightPanelWidth, leftCollapsed, rightCollapsed })
   const autoCollapsedRef = useRef({ left: false, right: false })
+  const [mapView, setMapView] = useState({ zoom: 1, panX: 0, panY: 0 })
+  const [maxMapZoom, setMaxMapZoom] = useState(1)
+  const [isMapPanning, setIsMapPanning] = useState(false)
 
   useEffect(() => {
     panelStateRef.current = { leftPanelWidth, rightPanelWidth, leftCollapsed, rightCollapsed }
@@ -646,6 +657,10 @@ function MapEditor() {
             String(floor.buildingId?._id || floor.buildingId) === firstBuilding._id,
           )
           setSelectedFloorId(firstFloor?._id || '')
+        } else {
+          const campusFloor = floorList.find((floor) => floor.context === 'campus')
+          setSelectedBuildingId(CAMPUS_SELECTION_ID)
+          setSelectedFloorId(campusFloor?._id || '')
         }
       } catch (loadError) {
         setError(loadError.message)
@@ -1052,6 +1067,8 @@ function MapEditor() {
     )
     setSelectedBuildingId(buildingId)
     setSelectedFloorId(firstFloor?._id || '')
+    resetMapView()
+    endMapPan()
     setNodes([])
     setConnections([])
     setSelectedNodeId('')
@@ -1109,6 +1126,11 @@ function MapEditor() {
   }
 
   async function handleMapClick(event) {
+    if (suppressMapClickRef.current) {
+      suppressMapClickRef.current = false
+      return
+    }
+
     if (!['nav', 'room', 'stair', 'entrance', 'cabin'].includes(mode) || !selectedFloor || loadingNodes || creatingNodeRef.current) {
       return
     }
@@ -1197,6 +1219,167 @@ function MapEditor() {
       creatingNodeRef.current = false
     }
   }
+
+  function resetMapView() {
+    setMapView({ zoom: 1, panX: 0, panY: 0 })
+  }
+
+  function updateMapZoomLimit() {
+    const image = mapImageRef.current
+    if (!image || !image.complete || !image.naturalWidth || !image.clientWidth) {
+      return
+    }
+
+    const intrinsicScale = Math.min(
+      image.naturalWidth / image.clientWidth,
+      image.naturalHeight / image.clientHeight,
+    )
+    const nextLimit = Math.max(1, Math.min(MAX_MAP_ZOOM, intrinsicScale))
+    setMaxMapZoom((currentLimit) => (
+      Math.abs(currentLimit - nextLimit) < 0.01 ? currentLimit : nextLimit
+    ))
+    setMapView((current) => (
+      current.zoom > nextLimit
+        ? { ...current, zoom: nextLimit }
+        : current
+    ))
+  }
+
+  useEffect(() => {
+    const image = mapImageRef.current
+    if (!image) {
+      setMaxMapZoom(1)
+      return undefined
+    }
+
+    updateMapZoomLimit()
+    const observer = new ResizeObserver(updateMapZoomLimit)
+    observer.observe(image)
+    return () => observer.disconnect()
+  }, [selectedFloorId, selectedFloor?.mapImage])
+
+  function handleMapZoomButton(delta) {
+    const stage = mapStageRef.current
+    if (!stage) {
+      return
+    }
+    const bounds = stage.getBoundingClientRect()
+    zoomMapAtPoint(
+      mapView.zoom + delta,
+      bounds.left + bounds.width / 2,
+      bounds.top + bounds.height / 2,
+    )
+  }
+
+  function zoomMapAtPoint(nextZoom, clientX, clientY) {
+    const stage = mapStageRef.current
+    if (!stage) {
+      return
+    }
+
+    const zoom = Math.max(MIN_MAP_ZOOM, Math.min(maxMapZoom, nextZoom))
+    const bounds = stage.getBoundingClientRect()
+    const centerX = bounds.left + bounds.width / 2
+    const centerY = bounds.top + bounds.height / 2
+    setMapView((current) => {
+      const scale = zoom / current.zoom
+      return {
+        zoom,
+        panX: clientX - centerX - (clientX - centerX - current.panX) * scale,
+        panY: clientY - centerY - (clientY - centerY - current.panY) * scale,
+      }
+    })
+  }
+
+  function handleMapWheel(event) {
+    if (!selectedFloor?.mapImage || event.target.closest('button, input, select, textarea')) {
+      return
+    }
+    zoomMapAtPoint(
+      mapView.zoom + (event.deltaY < 0 ? MAP_ZOOM_STEP : -MAP_ZOOM_STEP),
+      event.clientX,
+      event.clientY,
+    )
+  }
+
+  function handleMapPointerDown(event) {
+    if (
+      !selectedFloor?.mapImage ||
+      mode !== 'select' ||
+      event.target.closest('button, input, select, textarea, a, [role="button"], .map-view-controls')
+    ) {
+      return
+    }
+
+    event.preventDefault()
+    mapPanRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      panX: mapView.panX,
+      panY: mapView.panY,
+    }
+    pendingMapPanRef.current = { panX: mapView.panX, panY: mapView.panY }
+    setIsMapPanning(true)
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+
+  function handleMapPointerMove(event) {
+    const pan = mapPanRef.current
+    if (!pan || pan.pointerId !== event.pointerId) {
+      return
+    }
+
+    const deltaX = event.clientX - pan.startX
+    const deltaY = event.clientY - pan.startY
+    if (Math.hypot(deltaX, deltaY) > 4) {
+      suppressMapClickRef.current = true
+    }
+    pendingMapPanRef.current = {
+      panX: pan.panX + deltaX,
+      panY: pan.panY + deltaY,
+    }
+    if (mapPanFrameRef.current === null) {
+      mapPanFrameRef.current = requestAnimationFrame(() => {
+        mapPanFrameRef.current = null
+        const pendingPan = pendingMapPanRef.current
+        if (pendingPan) {
+          setMapView((current) => ({ ...current, ...pendingPan }))
+        }
+      })
+    }
+  }
+
+  function endMapPan(event) {
+    if (mapPanRef.current && event && mapPanRef.current.pointerId !== event.pointerId) {
+      return
+    }
+    if (mapPanFrameRef.current !== null) {
+      cancelAnimationFrame(mapPanFrameRef.current)
+      mapPanFrameRef.current = null
+    }
+    if (pendingMapPanRef.current) {
+      setMapView((current) => ({ ...current, ...pendingMapPanRef.current }))
+    }
+    if (event && mapPanRef.current) {
+      event.currentTarget.releasePointerCapture?.(event.pointerId)
+    }
+    mapPanRef.current = null
+    pendingMapPanRef.current = null
+    setIsMapPanning(false)
+  }
+
+  function handleMapPointerEnd(event) {
+    endMapPan(event)
+  }
+
+  useEffect(() => () => {
+    if (mapPanFrameRef.current !== null) {
+      cancelAnimationFrame(mapPanFrameRef.current)
+    }
+    mapPanRef.current = null
+    pendingMapPanRef.current = null
+  }, [])
 
   async function handleCreateRoom(event) {
     event.preventDefault()
@@ -1793,6 +1976,8 @@ function MapEditor() {
       setSelectedNodeId('')
       setConnectionNodeIds([])
       setSelectedFloorId(floorId)
+      resetMapView()
+      endMapPan()
     }
     setStairPosition(null)
     setStairPart('')
@@ -1893,28 +2078,52 @@ function MapEditor() {
             style={{ '--panel-width': `${leftPanelWidth}px` }}
           >
           <section className="building-management">
-            <label className="building-selector-label" htmlFor="building-selector">
-              Building
-            </label>
+            <div className="building-selector-header">
+              <div>
+                <p className="building-selector-label">Map context</p>
+                <p className="building-selector-help">Choose a map area to manage</p>
+              </div>
+              {!loadingBuildings && (
+                <span className="context-count">{buildings.length + 1}</span>
+              )}
+            </div>
             {loadingBuildings ? (
-              <p className="sidebar-message">Loading buildings…</p>
-            ) : buildings.length === 0 ? (
-              <p className="sidebar-message">No buildings yet. Create one to manage its floors.</p>
+              <p className="sidebar-message">Loading map contexts…</p>
             ) : (
-              <select
-                className="building-selector"
-                disabled={savingBuilding || deletingBuilding}
-                id="building-selector"
-                onChange={(event) => handleSelectBuilding(event.target.value)}
-                value={selectedBuildingId}
-              >
-                <option value={CAMPUS_SELECTION_ID}>Campus (outdoor)</option>
-                {buildings.map((building) => (
-                  <option key={building._id} value={building._id}>
-                    {building.name}
-                  </option>
-                ))}
-              </select>
+              <div aria-label="Map context" className="map-context-options" role="group">
+                <button
+                  aria-pressed={selectedBuildingId === CAMPUS_SELECTION_ID}
+                  className={`map-context-option${selectedBuildingId === CAMPUS_SELECTION_ID ? ' is-active' : ''}`}
+                  disabled={savingBuilding || deletingBuilding}
+                  onClick={() => handleSelectBuilding(CAMPUS_SELECTION_ID)}
+                  type="button"
+                >
+                  <span className="map-context-option-title">Campus Map</span>
+                  <span className="map-context-option-meta">
+                    {floorRecords.filter((floor) => floor.context === 'campus').length} campus maps
+                  </span>
+                </button>
+                {buildings.map((building) => {
+                  const buildingFloorCount = floorRecords.filter(
+                    (floor) => String(floor.buildingId?._id || floor.buildingId) === String(building._id),
+                  ).length
+                  return (
+                    <button
+                      aria-pressed={selectedBuildingId === building._id}
+                      className={`map-context-option${selectedBuildingId === building._id ? ' is-active' : ''}`}
+                      disabled={savingBuilding || deletingBuilding}
+                      key={building._id}
+                      onClick={() => handleSelectBuilding(building._id)}
+                      type="button"
+                    >
+                      <span className="map-context-option-title">{building.name}</span>
+                      <span className="map-context-option-meta">
+                        {buildingFloorCount} {buildingFloorCount === 1 ? 'floor' : 'floors'}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
             )}
             {selectedBuilding && (
               <div className="building-actions">
@@ -2202,14 +2411,55 @@ function MapEditor() {
             <p className="map-mode-hint">Delete mode — select a node, then confirm deletion in the editor panel</p>
           )}
 
-          <div className={`map-stage${['nav', 'room', 'stair', 'entrance', 'cabin'].includes(mode) ? ' is-placing' : ''}`}>
+          <div
+            className={`map-stage${['nav', 'room', 'stair', 'entrance', 'cabin'].includes(mode) ? ' is-placing' : ''}${isMapPanning ? ' is-panning' : ''}`}
+            onPointerCancel={handleMapPointerEnd}
+            onPointerDown={handleMapPointerDown}
+            onPointerMove={handleMapPointerMove}
+            onPointerUp={handleMapPointerEnd}
+            onWheel={handleMapWheel}
+            ref={mapStageRef}
+          >
+            <div className="map-view-controls" role="toolbar" aria-label="Map view controls">
+              <button
+                aria-label="Zoom in"
+                disabled={!selectedFloor?.mapImage || mapView.zoom >= maxMapZoom}
+                onClick={() => handleMapZoomButton(MAP_ZOOM_STEP)}
+                type="button"
+              >
+                +
+              </button>
+              <button
+                aria-label="Zoom out"
+                disabled={!selectedFloor?.mapImage || mapView.zoom <= MIN_MAP_ZOOM}
+                onClick={() => handleMapZoomButton(-MAP_ZOOM_STEP)}
+                type="button"
+              >
+                −
+              </button>
+              <button
+                aria-label="Reset map view"
+                disabled={!selectedFloor?.mapImage}
+                onClick={resetMapView}
+                type="button"
+              >
+                Reset
+              </button>
+            </div>
             {selectedFloor ? (
               selectedFloor.mapImage ? (
                 <div className="map-image-holder">
-                  <div className="map-canvas" onClick={handleMapClick}>
+                  <div
+                    className="map-canvas"
+                    onClick={handleMapClick}
+                    style={{
+                      transform: `translate(${mapView.panX}px, ${mapView.panY}px) scale(${mapView.zoom})`,
+                    }}
+                  >
                     <img
                       alt={`Map of ${selectedFloor.name}`}
                       className="floor-map"
+                      onLoad={updateMapZoomLimit}
                       ref={mapImageRef}
                       src={`${SERVER_URL}${selectedFloor.mapImage}`}
                     />

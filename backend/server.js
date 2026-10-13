@@ -33,13 +33,14 @@ app.use('/api/connections', connectionsRoute)
 app.use('/api/cabins', cabinsRoute)
 app.get('/api/navigation/bootstrap', async (req, res) => {
   try {
-    const [floors, roomNodes, cabinRecords] = await Promise.all([
+    const [floors, roomNodes, entranceNodes, cabinRecords] = await Promise.all([
       Floor.find().sort({ floorNumber: 1 }),
       Node.find({ type: 'room' }),
+      Node.find({ type: 'buildingConnection', connectionType: 'entrance' }),
       TeacherCabin.find().sort({ createdAt: 1 }),
     ])
     const floorById = new Map(floors.map((floor) => [String(floor._id), floor]))
-    const rooms = roomNodes.flatMap((node) => {
+    function decorateLocationNode(node) {
       const floor = floorById.get(String(node.floorId))
       if (!floor) {
         return []
@@ -51,11 +52,13 @@ app.get('/api/navigation/bootstrap', async (req, res) => {
         floorName: floor.name,
         floorNumber: floor.floorNumber,
       }]
-    })
+    }
+    const rooms = roomNodes.flatMap(decorateLocationNode)
+    const entrances = entranceNodes.flatMap(decorateLocationNode)
 
     const cabins = await decorateCabins(cabinRecords)
 
-    res.json({ floors, rooms, cabins })
+    res.json({ floors, rooms, entrances, cabins })
   } catch (error) {
     console.error('Navigation bootstrap failed:', error.message)
     res.status(500).json({ message: 'Could not load navigation data.' })
