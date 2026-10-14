@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx'
 import buildRouteSegments from '../utils/buildRouteSegments.js'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
+import mapImageUrl from '../utils/mapImageUrl.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const API_URL = `${SERVER_URL}/api`
@@ -106,6 +107,8 @@ function MapEditor() {
   const [name, setName] = useState('')
   const [floorNumber, setFloorNumber] = useState('')
   const [mapImage, setMapImage] = useState(null)
+  const [mapImageError, setMapImageError] = useState(false)
+  const [replacingMapImage, setReplacingMapImage] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadingNodes, setLoadingNodes] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -859,6 +862,40 @@ function MapEditor() {
     if (!selectedBuildingId) {
       setError('Select a building or the campus map before adding a floor.')
       return
+    }
+
+    async function handleReplaceMapImage(event) {
+      const file = event.target.files[0]
+      event.target.value = ''
+      if (!file || !selectedFloor) {
+        return
+      }
+
+      setError('')
+      setSuccessMessage('')
+      setReplacingMapImage(true)
+      const formData = new FormData()
+      formData.append('mapImage', file)
+      try {
+        const response = await fetch(`${API_URL}/floors/${selectedFloor._id}/image`, {
+          method: 'PATCH',
+          body: formData,
+        })
+        const updatedFloor = await readResponse(response)
+        setMapImageError(false)
+        setFloorRecords((currentFloors) => currentFloors.map((floor) =>
+          floor._id === updatedFloor._id ? updatedFloor : floor,
+        ))
+        setSuccessMessage(`Map image for "${updatedFloor.name}" was replaced.`)
+      } catch (replaceError) {
+        setError(replaceError.message)
+      } finally {
+        setReplacingMapImage(false)
+      }
+    }
+
+    const _replaceMapImageHandler = (event) => {
+      void handleReplaceMapImage(event)
     }
     const isCampusContext = selectedBuildingId === CAMPUS_SELECTION_ID
     setSaving(true)
@@ -1970,6 +2007,7 @@ function MapEditor() {
 
   function handleSelectFloor(floorId) {
     if (floorId !== selectedFloorId) {
+      setMapImageError(false)
       setLoadingNodes(true)
       setNodes([])
       setConnections([])
@@ -2353,6 +2391,16 @@ function MapEditor() {
             >
               Connect
             </button>
+            <label className="tool-button">
+              {replacingMapImage ? 'Uploading…' : 'Replace map image'}
+              <input
+                accept="image/*"
+                disabled={!selectedFloor || replacingMapImage}
+                hidden
+                onChange={_replaceMapImageHandler}
+                type="file"
+              />
+            </label>
             <button
               aria-pressed={mode === 'delete'}
               className={`tool-button${mode === 'delete' ? ' is-active' : ''}`}
@@ -2459,10 +2507,16 @@ function MapEditor() {
                     <img
                       alt={`Map of ${selectedFloor.name}`}
                       className="floor-map"
+                      onError={() => setMapImageError(true)}
                       onLoad={updateMapZoomLimit}
                       ref={mapImageRef}
-                      src={`${SERVER_URL}${selectedFloor.mapImage}`}
+                      src={mapImageUrl(SERVER_URL, selectedFloor.mapImage)}
                     />
+                    {mapImageError && (
+                      <p className="map-image-error" role="alert">
+                        This floor map could not be loaded. Replace the image or check the stored file.
+                      </p>
+                    )}
                     <svg
                       aria-hidden="true"
                       className={`map-connections-overlay${mode === 'test' && routeResult ? ' is-muted' : ''}`}

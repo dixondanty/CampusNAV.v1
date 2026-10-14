@@ -1,22 +1,21 @@
 const express = require('express')
 const multer = require('multer')
-const path = require('node:path')
-const crypto = require('node:crypto')
+const mongoose = require('mongoose')
 const Building = require('../models/Building')
 const Floor = require('../models/Floor')
 const Node = require('../models/Node')
 const Connection = require('../models/Connection')
 const TeacherCabin = require('../models/TeacherCabin')
-const { uploadDirectory } = require('../services/uploadStorage')
+const {
+  getFile,
+  openDownloadStream,
+  reportOrphanCandidate,
+  uploadImage,
+} = require('../services/gridFsStorage')
 
 const router = express.Router()
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: uploadDirectory,
-    filename: (req, file, callback) => {
-      callback(null, `${crypto.randomUUID()}${path.extname(file.originalname)}`)
-    },
-  }),
+  storage: multer.memoryStorage(),
   fileFilter: (req, file, callback) => {
     if (!file.mimetype.startsWith('image/')) {
       const error = new Error('Please upload an image file.')
@@ -63,14 +62,94 @@ router.post('/', upload.single('mapImage'), async (req, res) => {
     }
   }
 
-  const floor = await Floor.create({
-    name: req.body.name,
-    context,
-    ...(buildingId ? { buildingId } : {}),
-    floorNumber: req.body.floorNumber,
-    mapImage: req.file ? `/uploads/${req.file.filename}` : req.body.mapImage,
-  })
-  res.status(201).json(floor)
+  let uploadedImage = null
+  let createdFloor = null
+  try {
+    if (req.file) {
+      uploadedImage = await uploadImage(
+        req.file.buffer,
+        req.file.mimetype,
+        req.file.originalname,
+      )
+    }
+
+    createdFloor = await Floor.create({
+      name: req.body.name,
+      context,
+      ...(buildingId ? { buildingId } : {}),
+      floorNumber: req.body.floorNumber,
+      mapImage: uploadedImage ? '' : req.body.mapImage,
+      ...(uploadedImage ? { mapImageFileId: uploadedImage } : {}),
+    })
+    if (uploadedImage) {
+      createdFloor.mapImage = `/api/floors/${createdFloor._id}/image`
+      await createdFloor.save()
+    }
+    res.status(201).json(createdFloor)
+  } catch (saveError) {
+    if (uploadedImage) {
+      reportOrphanCandidate(uploadedImage, 'failed floor write; retained for deferred reference audit')
+    }
+    if (createdFloor) {
+      try {
+        await Floor.deleteOne({ _id: createdFloor._id })
+      } catch (recordCleanupError) {
+        console.error(`Floor record cleanup failed for ${createdFloor._id}:`, recordCleanupError.message)
+      }
+    }
+    throw saveError
+  }
+})
+
+router.get('/:id/image', async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ message: 'Invalid floor ID.' })
+  }
+  const floor = await Floor.findById(req.params.id).select('mapImageFileId')
+  if (!floor || !floor.mapImageFileId) {
+    return res.status(404).json({ message: 'Floor image not found.' })
+  }
+  const file = await getFile(floor.mapImageFileId)
+  if (!file) {
+    return res.status(404).json({ message: 'Floor image not found.' })
+  }
+  res.type(file.metadata?.contentType || 'application/octet-stream')
+  res.set('Cache-Control', 'no-store')
+  openDownloadStream(floor.mapImageFileId).on('error', (error) => {
+    console.error(`GridFS download failed for ${floor.mapImageFileId}:`, error.message)
+    if (!res.headersSent) res.status(404).end()
+  }).pipe(res)
+})
+
+router.patch('/:id/image', upload.single('mapImage'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ message: 'A map image file is required.' })
+  }
+
+  const floor = await Floor.findById(req.params.id)
+  if (!floor) {
+    return res.status(404).json({ message: 'Floor not found.' })
+  }
+
+  const uploadedImage = await uploadImage(
+    req.file.buffer,
+    req.file.mimetype,
+    req.file.originalname,
+  )
+  const previousImageId = floor.mapImageFileId
+  try {
+    floor.mapImage = `/api/floors/${floor._id}/image`
+    floor.mapImageFileId = uploadedImage
+    await floor.save()
+  } catch (saveError) {
+    reportOrphanCandidate(uploadedImage, 'failed replacement write; retained for deferred reference audit')
+    throw saveError
+  }
+
+  if (previousImageId && String(previousImageId) !== String(uploadedImage)) {
+    reportOrphanCandidate(previousImageId, 'replaced floor image retained for deferred safe cleanup')
+  }
+  res.json(floor)
 })
 
 router.delete('/:id', async (req, res) => {
@@ -133,6 +212,9 @@ router.delete('/:id', async (req, res) => {
     }
   }
 
+  if (floor.mapImageFileId) {
+    reportOrphanCandidate(floor.mapImageFileId, 'deleted floor image retained for deferred safe cleanup')
+  }
   res.json({ message: 'Floor deleted.' })
 })
 

@@ -70,25 +70,6 @@ app.get('/api/navigation/bootstrap', async (req, res) => {
 })
 app.use('/api/navigation', navigationRoute)
 
-if (!process.env.MONGODB_URI) {
-  console.error('MongoDB connection failed: MONGODB_URI is missing. Add it to backend/.env.')
-  process.exit(1)
-}
-
-mongoose
-  .connect(process.env.MONGODB_URI)
-  .then(() => {
-    console.log('MongoDB connected successfully.')
-    console.log(`Upload storage directory: ${uploadDirectory}`)
-    app.listen(port, () => {
-      console.log(`CampusAR API listening on port ${port}`)
-    })
-  })
-  .catch((error) => {
-    console.error('MongoDB connection failed:', error.message)
-    process.exit(1)
-  })
-
 app.use((error, req, res, next) => {
   if (error.name === 'MulterError' || error.status === 400) {
     return res.status(400).json({ message: error.message })
@@ -105,3 +86,26 @@ app.use((error, req, res, next) => {
   console.error('API request failed:', error.message)
   res.status(500).json({ message: 'An unexpected server error occurred.' })
 })
+
+if (require.main === module) {
+  if (!process.env.MONGODB_URI) {
+    console.error('MongoDB connection failed: MONGODB_URI is missing. Add it to backend/.env.')
+    process.exit(1)
+  }
+
+  mongoose
+    .connect(process.env.MONGODB_URI)
+    .then(() => {
+      console.log('MongoDB connected successfully.')
+      console.log(`Upload storage directory: ${uploadDirectory}`)
+      app.listen(port, () => {
+        console.log(`CampusAR API listening on port ${port}`)
+      })
+    })
+    .catch((error) => {
+      console.error('MongoDB connection failed:', error.message)
+      process.exit(1)
+    })
+}
+
+module.exports = app

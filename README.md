@@ -44,27 +44,32 @@ npm start
 
 The API listens on port 5000 by default. Its health endpoint is `http://localhost:5000/api/health`.
 
-### Persistent map-image storage on Render
+### Persistent map-image storage
 
-Uploaded images are stored on the backend filesystem and served at their existing
-`/uploads/<filename>` paths. For production, configure a Render persistent disk
-on the backend service:
+New floor-map uploads use MongoDB GridFS so they survive Render restarts and
+redeployments independently of the Render filesystem. Configure this backend
+environment variable in Render:
 
-1. Add a persistent disk to the Render web service.
-2. Use `/var/data` as the disk mount path.
-3. Set the backend environment variable `UPLOAD_DIR` to `/var/data/uploads`.
-4. Redeploy the backend.
+```text
+GRIDFS_BUCKET_NAME=floorMaps
+```
 
-The backend creates the directory if it does not exist and uses the configured
-directory for both Multer uploads and Express `/uploads` serving. Do not point
-`UPLOAD_DIR` at a frontend build directory or commit uploaded images to source
-control.
+New images are stored in the MongoDB GridFS bucket as their original bytes.
+MongoDB stores the GridFS file ID in `Floor.mapImageFileId`, while the existing
+`mapImage` field contains the stable API path used by the frontend.
+The backend streams GridFS images from `GET /api/floors/:floorId/image` with
+their stored MIME type and `Cache-Control: no-store`, so replacement images are
+not hidden behind a stale browser cache.
 
-Existing database records keep their `/uploads/...` URLs. Files that are already
-missing from production must be restored separately by re-uploading the original
-image through the hosted Admin page or copying the exact original file into the
-persistent disk. No replacement image should be generated. After restoration,
-verify the image URL returns `200` before relying on the existing floor record.
+Legacy `/uploads/...` records remain supported by the backend filesystem route.
+They should be replaced through the Admin image-replacement action when their
+files are missing. The replacement preserves the floor ID, nodes, connections,
+cabins, and coordinates. GridFS uploads do not depend on `UPLOAD_DIR`.
+Replaced or deleted GridFS images are retained and logged as
+`gridfs-orphan-candidate` records for deferred cleanup. This conservative
+policy avoids deleting a file that may still be referenced by another Floor
+during concurrent requests; cleanup should be performed only after an
+independent reference audit.
 
 ## Run the tests
 
@@ -79,8 +84,14 @@ npm test
 
 - `services/dijkstra.test.js` — shortest-path behavior, edge traversal, and invalid weight handling.
 - `services/validation.test.js` — building-connection fields, same-floor allow-list, skywalk cross-building rules, stair connection rules, and node schema validation.
+- `routes/floors.integration.test.js` — HTTP/GridFS upload, retrieval, replacement, missing-image, shared-reference, cache, and concurrency checks.
 
-The suite currently reports 27 passing tests. Test files use `node:test` and `node:assert/strict` only, with no test framework or extra dependency.
+The HTTP/GridFS tests are skipped unless `TEST_MONGODB_URI` is explicitly set
+to a MongoDB URI whose database name contains `test`. They drop only that
+test database during setup and teardown; never point this variable at a
+production database.
+
+The suite currently reports 34 passing tests. Test files use `node:test` and `node:assert/strict` only, with no test framework or extra dependency.
 
 ### Not covered by the suite
 

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx'
 import buildRouteSegments from '../utils/buildRouteSegments.js'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
+import mapImageUrl from '../utils/mapImageUrl.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const API_URL = `${SERVER_URL}/api`
@@ -51,6 +52,7 @@ function UserPage() {
   const [navigating, setNavigating] = useState(false)
   const [mapView, setMapView] = useState({ zoom: 1, panX: 0, panY: 0 })
   const [maxMapZoom, setMaxMapZoom] = useState(1)
+  const [mapImageError, setMapImageError] = useState(false)
   const [isMapPanning, setIsMapPanning] = useState(false)
   const mapStageRef = useRef(null)
   const mapImageRef = useRef(null)
@@ -181,6 +183,7 @@ function UserPage() {
   }
 
   function setDisplayFloor(floorId) {
+    setMapImageError(false)
     resetMapView()
     setMaxMapZoom(1)
     mapPanRef.current = null
@@ -825,10 +828,16 @@ function UserPage() {
                           <img
                             alt={`${selectedDisplayFloor.name} route map`}
                             className="user-route-map-image"
+                            onError={() => setMapImageError(true)}
                             onLoad={updateMapZoomLimit}
                             ref={mapImageRef}
-                            src={`${SERVER_URL}${selectedDisplayFloor.mapImage}`}
+                            src={mapImageUrl(SERVER_URL, selectedDisplayFloor.mapImage)}
                           />
+                          {mapImageError && (
+                            <p className="user-navigation-error map-image-error" role="alert">
+                              This floor map could not be loaded. Please ask an administrator to replace it.
+                            </p>
+                          )}
                           <svg aria-hidden="true" className="user-route-map-overlay" preserveAspectRatio="none" viewBox="0 0 100 100">
                             {displayRouteSegments.map((segment) => <line key={segment.key} x1={segment.from.x} y1={segment.from.y} x2={segment.to.x} y2={segment.to.y} />)}
                           </svg>
