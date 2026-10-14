@@ -9,7 +9,7 @@ const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const API_URL = `${SERVER_URL}/api`
 const MIN_USER_MAP_ZOOM = 0.75
 const MIN_USER_MAP_INSPECTION_ZOOM = 4
-const MAX_USER_MAP_ZOOM = 6
+const MAX_USER_MAP_ZOOM = 18
 const USER_MAP_ZOOM_STEP = 0.15
 
 async function readResponse(response) {
