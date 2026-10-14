@@ -28,9 +28,9 @@ function LoginPage() {
   return (
     <main className="login-page">
       <section className="login-card">
-        <p className="eyebrow">CampusNav</p>
+        <p className="eyebrow">CampusNAV</p>
         <h1>Campus Navigation</h1>
-        <p className="intro">Sign in to continue to your CampusNav workspace.</p>
+        <p className="intro">Sign in to continue to your CampusNAV workspace.</p>
 
         <form className="login-form" onSubmit={handleSubmit}>
           <label>

@@ -4,6 +4,7 @@ import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx
 import buildRouteSegments from '../utils/buildRouteSegments.js'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 import mapImageUrl from '../utils/mapImageUrl.js'
+import { MAX_MAP_ZOOM, MAP_ZOOM_STEP, MIN_MAP_ZOOM, clampMapZoom } from '../utils/mapZoom.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const API_URL = `${SERVER_URL}/api`
@@ -18,9 +19,6 @@ const STACK_BREAKPOINT = 640
 const DEFAULT_LEFT_PANEL_WIDTH = 280
 const DEFAULT_RIGHT_PANEL_WIDTH = 340
 const MAX_PANEL_WIDTH = 900
-const MIN_MAP_ZOOM = 0.75
-const MAX_MAP_ZOOM = 12
-const MAP_ZOOM_STEP = 0.15
 const LEFT_PANEL_WIDTH_KEY = 'campusnav.leftPanelWidth.v2'
 const RIGHT_PANEL_WIDTH_KEY = 'campusnav.rightPanelWidth.v2'
 const LEFT_PANEL_COLLAPSED_KEY = 'campusnav.leftPanelCollapsed.v2'
@@ -134,6 +132,7 @@ function MapEditor() {
   const mapPanRef = useRef(null)
   const mapPanFrameRef = useRef(null)
   const pendingMapPanRef = useRef(null)
+  const mapWheelHandlerRef = useRef(null)
   const suppressMapClickRef = useRef(false)
   const creatingNodeRef = useRef(false)
   const layoutRef = useRef(null)
@@ -1264,11 +1263,7 @@ function MapEditor() {
       return
     }
 
-    const intrinsicScale = Math.min(
-      image.naturalWidth / image.clientWidth,
-      image.naturalHeight / image.clientHeight,
-    )
-    const nextLimit = Math.max(1, Math.min(MAX_MAP_ZOOM, intrinsicScale))
+    const nextLimit = MAX_MAP_ZOOM
     setMaxMapZoom((currentLimit) => (
       Math.abs(currentLimit - nextLimit) < 0.01 ? currentLimit : nextLimit
     ))
@@ -1311,7 +1306,7 @@ function MapEditor() {
       return
     }
 
-    const zoom = Math.max(MIN_MAP_ZOOM, Math.min(maxMapZoom, nextZoom))
+    const zoom = clampMapZoom(nextZoom, maxMapZoom)
     const bounds = stage.getBoundingClientRect()
     const centerX = bounds.left + bounds.width / 2
     const centerY = bounds.top + bounds.height / 2
@@ -1326,6 +1321,7 @@ function MapEditor() {
   }
 
   function handleMapWheel(event) {
+    event.preventDefault()
     if (!selectedFloor?.mapImage || event.target.closest('button, input, select, textarea')) {
       return
     }
@@ -1335,6 +1331,22 @@ function MapEditor() {
       event.clientY,
     )
   }
+
+  useEffect(() => {
+    mapWheelHandlerRef.current = handleMapWheel
+  })
+
+  useEffect(() => {
+    const stage = mapStageRef.current
+    if (!stage) {
+      return undefined
+    }
+    function handleNativeMapWheel(event) {
+      mapWheelHandlerRef.current?.(event)
+    }
+    stage.addEventListener('wheel', handleNativeMapWheel, { passive: false })
+    return () => stage.removeEventListener('wheel', handleNativeMapWheel)
+  }, [selectedFloorId, selectedFloor?.mapImage])
 
   function handleMapPointerDown(event) {
     if (
@@ -2080,7 +2092,7 @@ function MapEditor() {
       <header className="map-editor-topbar">
         <div className="topbar-brand">
           <span className="brand-mark" aria-hidden="true">C</span>
-          <strong>CampusNav</strong>
+          <strong>CampusNAV</strong>
           <span className="topbar-divider" />
           <span className="topbar-title">Map Editor</span>
         </div>
@@ -2462,7 +2474,6 @@ function MapEditor() {
             onPointerDown={handleMapPointerDown}
             onPointerMove={handleMapPointerMove}
             onPointerUp={handleMapPointerEnd}
-            onWheel={handleMapWheel}
             ref={mapStageRef}
           >
             <div className="map-view-controls" role="toolbar" aria-label="Map view controls">

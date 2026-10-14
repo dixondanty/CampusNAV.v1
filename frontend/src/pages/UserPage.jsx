@@ -4,13 +4,10 @@ import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx
 import buildRouteSegments from '../utils/buildRouteSegments.js'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 import mapImageUrl from '../utils/mapImageUrl.js'
+import { MAX_MAP_ZOOM, MAP_ZOOM_STEP, MIN_MAP_ZOOM, clampMapZoom } from '../utils/mapZoom.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const API_URL = `${SERVER_URL}/api`
-const MIN_USER_MAP_ZOOM = 0.75
-const MIN_USER_MAP_INSPECTION_ZOOM = 4
-const MAX_USER_MAP_ZOOM = 18
-const USER_MAP_ZOOM_STEP = 0.15
 
 async function readResponse(response) {
   const data = await response.json()
@@ -197,14 +194,7 @@ function UserPage() {
     if (!image || !image.complete || !image.naturalWidth || !image.clientWidth) {
       return
     }
-    const intrinsicScale = Math.min(
-      image.naturalWidth / image.clientWidth,
-      image.naturalHeight / image.clientHeight,
-    )
-    const nextLimit = Math.min(
-      MAX_USER_MAP_ZOOM,
-      Math.max(MIN_USER_MAP_INSPECTION_ZOOM, intrinsicScale * 2.5),
-    )
+    const nextLimit = MAX_MAP_ZOOM
     setMaxMapZoom((currentLimit) => (
       Math.abs(currentLimit - nextLimit) < 0.01 ? currentLimit : nextLimit
     ))
@@ -236,7 +226,7 @@ function UserPage() {
   function zoomMapAtPoint(nextZoom, clientX, clientY) {
     const stage = mapStageRef.current
     if (!stage) return
-    const zoom = Math.max(MIN_USER_MAP_ZOOM, Math.min(maxMapZoom, nextZoom))
+    const zoom = clampMapZoom(nextZoom, maxMapZoom)
     const bounds = stage.getBoundingClientRect()
     const centerX = bounds.left + bounds.width / 2
     const centerY = bounds.top + bounds.height / 2
@@ -267,7 +257,7 @@ function UserPage() {
       return
     }
     zoomMapAtPoint(
-      mapView.zoom + (event.deltaY < 0 ? USER_MAP_ZOOM_STEP : -USER_MAP_ZOOM_STEP),
+      mapView.zoom + (event.deltaY < 0 ? MAP_ZOOM_STEP : -MAP_ZOOM_STEP),
       event.clientX,
       event.clientY,
     )
@@ -799,15 +789,15 @@ function UserPage() {
                           <button
                             aria-label="Zoom in"
                             disabled={mapView.zoom >= maxMapZoom}
-                            onClick={() => handleMapZoomButton(USER_MAP_ZOOM_STEP)}
+                            onClick={() => handleMapZoomButton(MAP_ZOOM_STEP)}
                             type="button"
                           >
                             +
                           </button>
                           <button
                             aria-label="Zoom out"
-                            disabled={mapView.zoom <= MIN_USER_MAP_ZOOM}
-                            onClick={() => handleMapZoomButton(-USER_MAP_ZOOM_STEP)}
+                            disabled={mapView.zoom <= MIN_MAP_ZOOM}
+                            onClick={() => handleMapZoomButton(-MAP_ZOOM_STEP)}
                             type="button"
                           >
                             −

@@ -99,7 +99,7 @@ if (require.main === module) {
       console.log('MongoDB connected successfully.')
       console.log(`Upload storage directory: ${uploadDirectory}`)
       app.listen(port, () => {
-        console.log(`CampusAR API listening on port ${port}`)
+        console.log(`CampusNAV API listening on port ${port}`)
       })
     })
     .catch((error) => {

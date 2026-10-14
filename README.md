@@ -1,6 +1,6 @@
-# CampusAR
+# CampusNAV – Campus Navigation
 
-CampusAR is a student project for indoor campus navigation across floors. It uses a React/Vite frontend and an Express/Node.js backend with MongoDB Atlas and Mongoose.
+CampusNAV is a student project for indoor campus navigation across floors. It uses a React/Vite frontend and an Express/Node.js backend with MongoDB Atlas and Mongoose.
 
 ## Features
 
