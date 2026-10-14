@@ -854,6 +854,36 @@ function MapEditor() {
     }
   }, [selectedFloorId])
 
+  async function handleReplaceMapImage(event) {
+    const file = event.target.files[0]
+    event.target.value = ''
+    if (!file || !selectedFloor) {
+      return
+    }
+
+    setError('')
+    setSuccessMessage('')
+    setReplacingMapImage(true)
+    const formData = new FormData()
+    formData.append('mapImage', file)
+    try {
+      const response = await fetch(`${API_URL}/floors/${selectedFloor._id}/image`, {
+        method: 'PATCH',
+        body: formData,
+      })
+      const updatedFloor = await readResponse(response)
+      setMapImageError(false)
+      setFloorRecords((currentFloors) => currentFloors.map((floor) =>
+        floor._id === updatedFloor._id ? updatedFloor : floor,
+      ))
+      setSuccessMessage(`Map image for "${updatedFloor.name}" was replaced.`)
+    } catch (replaceError) {
+      setError(replaceError.message)
+    } finally {
+      setReplacingMapImage(false)
+    }
+  }
+
   async function handleSubmit(event) {
     event.preventDefault()
     setError('')
@@ -864,39 +894,6 @@ function MapEditor() {
       return
     }
 
-    async function handleReplaceMapImage(event) {
-      const file = event.target.files[0]
-      event.target.value = ''
-      if (!file || !selectedFloor) {
-        return
-      }
-
-      setError('')
-      setSuccessMessage('')
-      setReplacingMapImage(true)
-      const formData = new FormData()
-      formData.append('mapImage', file)
-      try {
-        const response = await fetch(`${API_URL}/floors/${selectedFloor._id}/image`, {
-          method: 'PATCH',
-          body: formData,
-        })
-        const updatedFloor = await readResponse(response)
-        setMapImageError(false)
-        setFloorRecords((currentFloors) => currentFloors.map((floor) =>
-          floor._id === updatedFloor._id ? updatedFloor : floor,
-        ))
-        setSuccessMessage(`Map image for "${updatedFloor.name}" was replaced.`)
-      } catch (replaceError) {
-        setError(replaceError.message)
-      } finally {
-        setReplacingMapImage(false)
-      }
-    }
-
-    const _replaceMapImageHandler = (event) => {
-      void handleReplaceMapImage(event)
-    }
     const isCampusContext = selectedBuildingId === CAMPUS_SELECTION_ID
     setSaving(true)
 
@@ -2397,7 +2394,7 @@ function MapEditor() {
                 accept="image/*"
                 disabled={!selectedFloor || replacingMapImage}
                 hidden
-                onChange={_replaceMapImageHandler}
+                onChange={handleReplaceMapImage}
                 type="file"
               />
             </label>
