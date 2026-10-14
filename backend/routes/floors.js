@@ -7,11 +7,12 @@ const Floor = require('../models/Floor')
 const Node = require('../models/Node')
 const Connection = require('../models/Connection')
 const TeacherCabin = require('../models/TeacherCabin')
+const { uploadDirectory } = require('../services/uploadStorage')
 
 const router = express.Router()
 const upload = multer({
   storage: multer.diskStorage({
-    destination: path.join(__dirname, '..', 'uploads'),
+    destination: uploadDirectory,
     filename: (req, file, callback) => {
       callback(null, `${crypto.randomUUID()}${path.extname(file.originalname)}`)
     },

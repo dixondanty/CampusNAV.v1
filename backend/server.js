@@ -6,7 +6,6 @@ require('dotenv').config()
 const cors = require('cors')
 const express = require('express')
 const mongoose = require('mongoose')
-const path = require('node:path')
 const buildingsRoute = require('./routes/buildings')
 const cabinsRoute = require('./routes/cabins')
 const connectionsRoute = require('./routes/connections')
@@ -18,13 +17,18 @@ const Floor = require('./models/Floor')
 const Node = require('./models/Node')
 const TeacherCabin = require('./models/TeacherCabin')
 const { decorateCabins } = require('./services/cabinDestination')
+const { uploadDirectory } = require('./services/uploadStorage')
 
 const app = express()
 const port = process.env.PORT || 5000
 
 app.use(cors())
 app.use(express.json())
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
+app.use('/uploads', express.static(uploadDirectory))
+app.use('/uploads', (req, res) => {
+  console.error(`Upload file not found: ${req.path} (directory: ${uploadDirectory})`)
+  res.status(404).json({ message: 'Uploaded map image not found.' })
+})
 app.use('/api/health', healthRoute)
 app.use('/api/buildings', buildingsRoute)
 app.use('/api/floors', floorsRoute)
@@ -75,6 +79,7 @@ mongoose
   .connect(process.env.MONGODB_URI)
   .then(() => {
     console.log('MongoDB connected successfully.')
+    console.log(`Upload storage directory: ${uploadDirectory}`)
     app.listen(port, () => {
       console.log(`CampusAR API listening on port ${port}`)
     })

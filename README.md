@@ -33,7 +33,8 @@ Open the local URL printed by Vite.
 
 1. Copy `backend/.env.example` to `backend/.env`.
 2. Set `MONGODB_URI` to your MongoDB Atlas connection string.
-3. Run:
+3. Optionally set `UPLOAD_DIR` to change where uploaded floor images are stored.
+4. Run:
 
 ```powershell
 cd backend
@@ -42,6 +43,28 @@ npm start
 ```
 
 The API listens on port 5000 by default. Its health endpoint is `http://localhost:5000/api/health`.
+
+### Persistent map-image storage on Render
+
+Uploaded images are stored on the backend filesystem and served at their existing
+`/uploads/<filename>` paths. For production, configure a Render persistent disk
+on the backend service:
+
+1. Add a persistent disk to the Render web service.
+2. Use `/var/data` as the disk mount path.
+3. Set the backend environment variable `UPLOAD_DIR` to `/var/data/uploads`.
+4. Redeploy the backend.
+
+The backend creates the directory if it does not exist and uses the configured
+directory for both Multer uploads and Express `/uploads` serving. Do not point
+`UPLOAD_DIR` at a frontend build directory or commit uploaded images to source
+control.
+
+Existing database records keep their `/uploads/...` URLs. Files that are already
+missing from production must be restored separately by re-uploading the original
+image through the hosted Admin page or copying the exact original file into the
+persistent disk. No replacement image should be generated. After restoration,
+verify the image URL returns `200` before relying on the existing floor record.
 
 ## Run the tests
 
