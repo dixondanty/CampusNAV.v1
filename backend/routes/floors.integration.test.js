@@ -90,7 +90,15 @@ test('uploads and retrieves PNG and JPEG bytes over HTTP', integrationOptions, a
     assert.equal(imageResponse.status, 200)
     assert.equal(image.contentType, type)
     assert.deepEqual(image.body, bytes)
-    assert.equal(imageResponse.headers.get('cache-control'), 'no-store')
+    assert.equal(imageResponse.headers.get('cache-control'), 'private, max-age=0, must-revalidate')
+    const etag = imageResponse.headers.get('etag')
+    assert.ok(etag, 'expected a validator so browsers can revalidate instead of re-downloading')
+
+    const revalidated = await fetch(`${baseUrl}${floor.mapImage}`, {
+      headers: { 'If-None-Match': etag },
+    })
+    assert.equal(revalidated.status, 304)
+    assert.equal((await revalidated.arrayBuffer()).byteLength, 0)
   }
 })
 

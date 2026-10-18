@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx'
 import buildRouteSegments from '../utils/buildRouteSegments.js'
@@ -105,7 +105,8 @@ function MapEditor() {
   const [name, setName] = useState('')
   const [floorNumber, setFloorNumber] = useState('')
   const [mapImage, setMapImage] = useState(null)
-  const [mapImageError, setMapImageError] = useState(false)
+  const [errorMapImageUrl, setErrorMapImageUrl] = useState('')
+  const [loadedMapImageUrl, setLoadedMapImageUrl] = useState('')
   const [replacingMapImage, setReplacingMapImage] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadingNodes, setLoadingNodes] = useState(false)
@@ -135,6 +136,9 @@ function MapEditor() {
   const mapWheelHandlerRef = useRef(null)
   const suppressMapClickRef = useRef(false)
   const creatingNodeRef = useRef(false)
+  const floorNodesRequestRef = useRef(new Map())
+  const floorConnectionsRequestRef = useRef(new Map())
+  const floorCabinsRequestRef = useRef(new Map())
   const layoutRef = useRef(null)
   const [leftPanelWidth, setLeftPanelWidth] = useState(() =>
     clampPanelWidth(readStoredPanelNumber(LEFT_PANEL_WIDTH_KEY, DEFAULT_LEFT_PANEL_WIDTH), MIN_LEFT_PANEL, MAX_PANEL_WIDTH)
@@ -367,6 +371,8 @@ function MapEditor() {
   )
   const selectedBuilding = buildings.find((building) => building._id === selectedBuildingId)
   const selectedFloor = floors.find((floor) => floor._id === selectedFloorId)
+  const currentMapImageUrl = selectedFloor?.mapImage ? mapImageUrl(SERVER_URL, selectedFloor.mapImage) : ''
+  const mapIsReady = Boolean(currentMapImageUrl) && loadedMapImageUrl === currentMapImageUrl && errorMapImageUrl !== currentMapImageUrl
   const selectedNode = nodes.find((node) => node._id === selectedNodeId)
   const navigationNodes = nodes.filter((node) => node.type === 'nav')
   const roomNodes = nodes.filter((node) => node.type === 'room')
@@ -598,9 +604,56 @@ function MapEditor() {
     return buildingList
   }
 
+  function requestFloorNodes(floorId, forceRefresh) {
+    const cache = floorNodesRequestRef.current
+    const cached = cache.get(floorId)
+    if (cached && !forceRefresh) {
+      return cached
+    }
+    const request = fetch(`${API_URL}/nodes/${floorId}`).then(readResponse)
+    cache.set(floorId, request)
+    request.catch(() => {
+      if (cache.get(floorId) === request) {
+        cache.delete(floorId)
+      }
+    })
+    return request
+  }
+
+  function requestFloorConnections(floorId, forceRefresh) {
+    const cache = floorConnectionsRequestRef.current
+    const cached = cache.get(floorId)
+    if (cached && !forceRefresh) {
+      return cached
+    }
+    const request = fetch(`${API_URL}/connections/${floorId}`).then(readResponse)
+    cache.set(floorId, request)
+    request.catch(() => {
+      if (cache.get(floorId) === request) {
+        cache.delete(floorId)
+      }
+    })
+    return request
+  }
+
+  function requestFloorCabins(floorId, forceRefresh) {
+    const cache = floorCabinsRequestRef.current
+    const cached = cache.get(floorId)
+    if (cached && !forceRefresh) {
+      return cached
+    }
+    const request = fetch(`${API_URL}/cabins?floorId=${floorId}`).then(readResponse)
+    cache.set(floorId, request)
+    request.catch(() => {
+      if (cache.get(floorId) === request) {
+        cache.delete(floorId)
+      }
+    })
+    return request
+  }
+
   async function refreshNodes(floorId) {
-    const response = await fetch(`${API_URL}/nodes/${floorId}`)
-    const floorNodes = await readResponse(response)
+    const floorNodes = await requestFloorNodes(floorId, true)
     const floor = floors.find((item) => item._id === floorId)
     const floorNodesOfInterest = floorNodes
       .filter((node) => ['nav', 'room', 'stair', 'buildingConnection'].includes(node.type))
@@ -620,15 +673,13 @@ function MapEditor() {
   }
 
   async function refreshConnections(floorId) {
-    const response = await fetch(`${API_URL}/connections/${floorId}`)
-    const floorConnections = await readResponse(response)
+    const floorConnections = await requestFloorConnections(floorId, true)
     setConnections(floorConnections)
     return floorConnections
   }
 
   async function refreshCabins(floorId) {
-    const response = await fetch(`${API_URL}/cabins?floorId=${floorId}`)
-    const floorCabins = await readResponse(response)
+    const floorCabins = await requestFloorCabins(floorId, true)
     setCabins(floorCabins)
     setAllTestCabins((currentCabins) => [
       ...currentCabins.filter(
@@ -686,8 +737,7 @@ function MapEditor() {
       try {
         const nodeLists = await Promise.all(
           floors.map(async (floor) => {
-            const response = await fetch(`${API_URL}/nodes/${floor._id}`)
-            const floorNodes = await readResponse(response)
+            const floorNodes = await requestFloorNodes(floor._id, false)
             return floorNodes.map((node) => ({
               ...node,
               floorName: floor.name,
@@ -724,8 +774,7 @@ function MapEditor() {
         const [nodeLists, allCabins] = await Promise.all([
           Promise.all(
             floorRecords.map(async (floor) => {
-              const response = await fetch(`${API_URL}/nodes/${floor._id}`)
-              const floorNodes = await readResponse(response)
+              const floorNodes = await requestFloorNodes(floor._id, false)
               return floorNodes
                 .filter((node) => ['nav', 'room', 'stair', 'buildingConnection'].includes(node.type))
                 .map((node) => ({
@@ -780,8 +829,7 @@ function MapEditor() {
       try {
         const floorNodeLists = await Promise.all(
           otherContextFloors.map(async (floor) => {
-            const response = await fetch(`${API_URL}/nodes/${floor._id}`)
-            const floorNodes = await readResponse(response)
+            const floorNodes = await requestFloorNodes(floor._id, false)
             return floorNodes
               .filter((node) => node.type === 'buildingConnection')
               .map((node) => ({ ...node, floorName: floor.name, floorNumber: floor.floorNumber }))
@@ -816,15 +864,10 @@ function MapEditor() {
 
     async function loadFloorData() {
       try {
-        const [nodesResponse, connectionsResponse, cabinsResponse] = await Promise.all([
-          fetch(`${API_URL}/nodes/${selectedFloorId}`),
-          fetch(`${API_URL}/connections/${selectedFloorId}`),
-          fetch(`${API_URL}/cabins?floorId=${selectedFloorId}`),
-        ])
         const [floorNodes, floorConnections, floorCabins] = await Promise.all([
-          readResponse(nodesResponse),
-          readResponse(connectionsResponse),
-          readResponse(cabinsResponse),
+          requestFloorNodes(selectedFloorId, false),
+          requestFloorConnections(selectedFloorId, false),
+          requestFloorCabins(selectedFloorId, false),
         ])
         if (active) {
           setNodes(floorNodes.filter((node) => ['nav', 'room', 'stair', 'buildingConnection'].includes(node.type)))
@@ -871,7 +914,7 @@ function MapEditor() {
         body: formData,
       })
       const updatedFloor = await readResponse(response)
-      setMapImageError(false)
+      setErrorMapImageUrl('')
       setFloorRecords((currentFloors) => currentFloors.map((floor) =>
         floor._id === updatedFloor._id ? updatedFloor : floor,
       ))
@@ -1164,7 +1207,7 @@ function MapEditor() {
       return
     }
 
-    if (!['nav', 'room', 'stair', 'entrance', 'cabin'].includes(mode) || !selectedFloor || loadingNodes || creatingNodeRef.current) {
+    if (!['nav', 'room', 'stair', 'entrance', 'cabin'].includes(mode) || !selectedFloor || !mapIsReady || loadingNodes || creatingNodeRef.current) {
       return
     }
 
@@ -1273,6 +1316,18 @@ function MapEditor() {
         : current
     ))
   }
+
+  function handleMapImageLoad() {
+    setLoadedMapImageUrl(currentMapImageUrl)
+    updateMapZoomLimit()
+  }
+
+  const handleMapImageRef = useCallback((node) => {
+    mapImageRef.current = node
+    if (node && node.complete && node.naturalWidth) {
+      setLoadedMapImageUrl(node.getAttribute('src') || '')
+    }
+  }, [])
 
   useEffect(() => {
     const image = mapImageRef.current
@@ -1678,6 +1733,7 @@ function MapEditor() {
         body: JSON.stringify({ name: updatedName }),
       })
       const updatedNode = await readResponse(response)
+      floorNodesRequestRef.current.delete(getNodeFloorId(selectedNode))
       setNodes((currentNodes) => currentNodes.map((node) =>
         node._id === updatedNode._id ? { ...node, name: updatedNode.name } : node,
       ))
@@ -2016,7 +2072,8 @@ function MapEditor() {
 
   function handleSelectFloor(floorId) {
     if (floorId !== selectedFloorId) {
-      setMapImageError(false)
+      setErrorMapImageUrl('')
+      setLoadedMapImageUrl('')
       setLoadingNodes(true)
       setNodes([])
       setConnections([])
@@ -2515,98 +2572,103 @@ function MapEditor() {
                     <img
                       alt={`Map of ${selectedFloor.name}`}
                       className="floor-map"
-                      onError={() => setMapImageError(true)}
-                      onLoad={updateMapZoomLimit}
-                      ref={mapImageRef}
+                      key={`${selectedFloor._id}-${selectedFloor.mapImageFileId || selectedFloor.mapImage}`}
+                      onError={() => setErrorMapImageUrl(currentMapImageUrl)}
+                      onLoad={handleMapImageLoad}
+                      ref={handleMapImageRef}
                       src={mapImageUrl(SERVER_URL, selectedFloor.mapImage)}
                     />
-                    {mapImageError && (
+                    {errorMapImageUrl && errorMapImageUrl === currentMapImageUrl && (
                       <p className="map-image-error" role="alert">
                         This floor map could not be loaded. Replace the image or check the stored file.
                       </p>
                     )}
-                    <svg
-                      aria-hidden="true"
-                      className={`map-connections-overlay${mode === 'test' && routeResult ? ' is-muted' : ''}`}
-                      preserveAspectRatio="none"
-                      viewBox="0 0 100 100"
-                    >
-                      {connections.map((connection) => {
-                        const fromNode = getConnectionNode(connection, 'from')
-                        const toNode = getConnectionNode(connection, 'to')
-                        if (
-                          !fromNode ||
-                          !toNode ||
-                          getNodeFloorId(fromNode) !== selectedFloorId ||
-                          getNodeFloorId(toNode) !== selectedFloorId
-                        ) {
-                          return null
-                        }
-                        return (
-                          <line
-                            key={connection._id}
-                            x1={fromNode.x}
-                            y1={fromNode.y}
-                            x2={toNode.x}
-                            y2={toNode.y}
-                          />
-                        )
-                      })}
-                    </svg>
-                    {routeResult && !loadingNodes && (
-                      <svg
-                        aria-hidden="true"
-                        className="map-route-overlay"
-                        preserveAspectRatio="none"
-                        viewBox="0 0 100 100"
-                      >
-                        {displayedRouteSegments.map((segment) => (
-                          <line
-                            key={segment.key}
-                            x1={segment.fromNode.x}
-                            y1={segment.fromNode.y}
-                            x2={segment.toNode.x}
-                            y2={segment.toNode.y}
-                          />
+                    {mapIsReady && (
+                      <>
+                        <svg
+                          aria-hidden="true"
+                          className={`map-connections-overlay${mode === 'test' && routeResult ? ' is-muted' : ''}`}
+                          preserveAspectRatio="none"
+                          viewBox="0 0 100 100"
+                        >
+                          {connections.map((connection) => {
+                            const fromNode = getConnectionNode(connection, 'from')
+                            const toNode = getConnectionNode(connection, 'to')
+                            if (
+                              !fromNode ||
+                              !toNode ||
+                              getNodeFloorId(fromNode) !== selectedFloorId ||
+                              getNodeFloorId(toNode) !== selectedFloorId
+                            ) {
+                              return null
+                            }
+                            return (
+                              <line
+                                key={connection._id}
+                                x1={fromNode.x}
+                                y1={fromNode.y}
+                                x2={toNode.x}
+                                y2={toNode.y}
+                              />
+                            )
+                          })}
+                        </svg>
+                        {routeResult && !loadingNodes && (
+                          <svg
+                            aria-hidden="true"
+                            className="map-route-overlay"
+                            preserveAspectRatio="none"
+                            viewBox="0 0 100 100"
+                          >
+                            {displayedRouteSegments.map((segment) => (
+                              <line
+                                key={segment.key}
+                                x1={segment.fromNode.x}
+                                y1={segment.fromNode.y}
+                                x2={segment.toNode.x}
+                                y2={segment.toNode.y}
+                              />
+                            ))}
+                          </svg>
+                        )}
+                        {nodes.map((node) => (
+                          <button
+                            aria-label={`Select ${node.type === 'room' ? 'room' : node.type === 'stair' ? `stair part ${node.stairPart}` : 'navigation node'} ${node.name}`}
+                            aria-pressed={node._id === selectedNodeId}
+                            className={`map-node-marker ${node.type === 'room' ? 'room-marker' : node.type === 'stair' ? 'stair-marker' : 'navigation-marker'}${node._id === selectedNodeId ? ' is-selected' : ''}${connectionNodeIds.includes(node._id) ? ' is-connection-selected' : ''}`}
+                            key={node._id}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleChooseNode(node)
+                            }}
+                            style={{ left: `${node.x}%`, top: `${node.y}%` }}
+                            type="button"
+                          >
+                            <span className={node.type === 'room' ? 'room-marker-square' : node.type === 'stair' ? 'stair-marker-diamond' : 'navigation-dot'} />
+                            <span className={`navigation-marker-label${node.type === 'stair' ? ' stair-marker-label' : ''}`}>
+                              {node.type === 'stair' ? `P${node.stairPart}` : node.name}
+                            </span>
+                          </button>
                         ))}
-                      </svg>
+                        {cabins.map((cabin) => (
+                          <button
+                            aria-label={`Teacher cabin ${cabin.name} for ${cabin.teacherName}`}
+                            aria-pressed={editingCabinId === cabin._id}
+                            className={`map-node-marker cabin-marker${editingCabinId === cabin._id ? ' is-selected' : ''}`}
+                            key={cabin._id}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleEditCabin(cabin)
+                            }}
+                            style={{ left: `${cabin.x}%`, top: `${cabin.y}%` }}
+                            type="button"
+                          >
+                            <span className="cabin-marker-pin" />
+                            <span className="cabin-marker-label">{cabin.teacherName}</span>
+                          </button>
+                        ))}
+                      </>
                     )}
-                    {nodes.map((node) => (
-                      <button
-                        aria-label={`Select ${node.type === 'room' ? 'room' : node.type === 'stair' ? `stair part ${node.stairPart}` : 'navigation node'} ${node.name}`}
-                        aria-pressed={node._id === selectedNodeId}
-                        className={`map-node-marker ${node.type === 'room' ? 'room-marker' : node.type === 'stair' ? 'stair-marker' : 'navigation-marker'}${node._id === selectedNodeId ? ' is-selected' : ''}${connectionNodeIds.includes(node._id) ? ' is-connection-selected' : ''}`}
-                        key={node._id}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          handleChooseNode(node)
-                        }}
-                        style={{ left: `${node.x}%`, top: `${node.y}%` }}
-                        type="button"
-                      >
-                        <span className={node.type === 'room' ? 'room-marker-square' : node.type === 'stair' ? 'stair-marker-diamond' : 'navigation-dot'} />
-                        <span className={`navigation-marker-label${node.type === 'stair' ? ' stair-marker-label' : ''}`}>
-                          {node.type === 'stair' ? `P${node.stairPart}` : node.name}
-                        </span>
-                      </button>
-                    ))}
-                    {cabins.map((cabin) => (
-                      <button
-                        aria-label={`Teacher cabin ${cabin.name} for ${cabin.teacherName}`}
-                        aria-pressed={editingCabinId === cabin._id}
-                        className={`map-node-marker cabin-marker${editingCabinId === cabin._id ? ' is-selected' : ''}`}
-                        key={cabin._id}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          handleEditCabin(cabin)
-                        }}
-                        style={{ left: `${cabin.x}%`, top: `${cabin.y}%` }}
-                        type="button"
-                      >
-                        <span className="cabin-marker-pin" />
-                        <span className="cabin-marker-label">{cabin.teacherName}</span>
-                      </button>
-                    ))}
                   </div>
                 </div>
               ) : (

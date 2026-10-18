@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx'
 import buildRouteSegments from '../utils/buildRouteSegments.js'
@@ -49,7 +49,8 @@ function UserPage() {
   const [navigating, setNavigating] = useState(false)
   const [mapView, setMapView] = useState({ zoom: 1, panX: 0, panY: 0 })
   const [maxMapZoom, setMaxMapZoom] = useState(1)
-  const [mapImageError, setMapImageError] = useState(false)
+  const [errorMapImageUrl, setErrorMapImageUrl] = useState('')
+  const [loadedMapImageUrl, setLoadedMapImageUrl] = useState('')
   const [isMapPanning, setIsMapPanning] = useState(false)
   const mapStageRef = useRef(null)
   const mapImageRef = useRef(null)
@@ -173,6 +174,8 @@ function UserPage() {
   const selectedDisplayFloor = contextFloors.find(
     (floor) => String(floor._id) === selectedDisplayFloorId,
   ) || contextFloors[0] || null
+  const currentMapImageUrl = selectedDisplayFloor?.mapImage ? mapImageUrl(SERVER_URL, selectedDisplayFloor.mapImage) : ''
+  const mapIsReady = Boolean(currentMapImageUrl) && loadedMapImageUrl === currentMapImageUrl && errorMapImageUrl !== currentMapImageUrl
   const routeNodes = route?.path || []
 
   function resetMapView() {
@@ -180,7 +183,8 @@ function UserPage() {
   }
 
   function setDisplayFloor(floorId) {
-    setMapImageError(false)
+    setErrorMapImageUrl('')
+    setLoadedMapImageUrl('')
     resetMapView()
     setMaxMapZoom(1)
     mapPanRef.current = null
@@ -202,6 +206,18 @@ function UserPage() {
       ? { ...current, zoom: nextLimit }
       : current)
   }
+
+  function handleMapImageLoad() {
+    setLoadedMapImageUrl(currentMapImageUrl)
+    updateMapZoomLimit()
+  }
+
+  const handleMapImageRef = useCallback((node) => {
+    mapImageRef.current = node
+    if (node && node.complete && node.naturalWidth) {
+      setLoadedMapImageUrl(node.getAttribute('src') || '')
+    }
+  }, [])
 
   useEffect(() => {
     const image = mapImageRef.current
@@ -818,29 +834,34 @@ function UserPage() {
                           <img
                             alt={`${selectedDisplayFloor.name} route map`}
                             className="user-route-map-image"
-                            onError={() => setMapImageError(true)}
-                            onLoad={updateMapZoomLimit}
-                            ref={mapImageRef}
+                            key={`${selectedDisplayFloor._id}-${selectedDisplayFloor.mapImageFileId || selectedDisplayFloor.mapImage}`}
+                            onError={() => setErrorMapImageUrl(currentMapImageUrl)}
+                            onLoad={handleMapImageLoad}
+                            ref={handleMapImageRef}
                             src={mapImageUrl(SERVER_URL, selectedDisplayFloor.mapImage)}
                           />
-                          {mapImageError && (
+                          {errorMapImageUrl && errorMapImageUrl === currentMapImageUrl && (
                             <p className="user-navigation-error map-image-error" role="alert">
                               This floor map could not be loaded. Please ask an administrator to replace it.
                             </p>
                           )}
-                          <svg aria-hidden="true" className="user-route-map-overlay" preserveAspectRatio="none" viewBox="0 0 100 100">
-                            {displayRouteSegments.map((segment) => <line key={segment.key} x1={segment.from.x} y1={segment.from.y} x2={segment.to.x} y2={segment.to.y} />)}
-                          </svg>
-                          {displayRoomMarkers.map(({ room, label, className }) => (
-                            <div aria-label={`${label}: ${room.name}`} className={`user-room-route-marker ${className}`} key={`${label}-${room._id}`} role="img" style={{ left: `${room.x}%`, top: `${room.y}%` }}>
-                              <span className="user-room-route-marker-pin" /><span className="user-room-route-marker-label"><strong>{label}</strong><span>{room.name}</span></span>
-                            </div>
-                          ))}
-                          {displayDestinationCabinMarkers.map((cabin) => (
-                            <div aria-label={`Teacher cabin: ${cabin.name} for ${cabin.teacherName}`} className="user-cabin-marker is-destination" key={cabin._id} role="img" style={{ left: `${cabin.x}%`, top: `${cabin.y}%` }}>
-                              <span className="user-cabin-marker-pin" /><span className="user-cabin-marker-label"><strong>Destination</strong><span>{cabin.teacherName}</span></span>
-                            </div>
-                          ))}
+                          {mapIsReady && (
+                            <>
+                              <svg aria-hidden="true" className="user-route-map-overlay" preserveAspectRatio="none" viewBox="0 0 100 100">
+                                {displayRouteSegments.map((segment) => <line key={segment.key} x1={segment.from.x} y1={segment.from.y} x2={segment.to.x} y2={segment.to.y} />)}
+                              </svg>
+                              {displayRoomMarkers.map(({ room, label, className }) => (
+                                <div aria-label={`${label}: ${room.name}`} className={`user-room-route-marker ${className}`} key={`${label}-${room._id}`} role="img" style={{ left: `${room.x}%`, top: `${room.y}%` }}>
+                                  <span className="user-room-route-marker-pin" /><span className="user-room-route-marker-label"><strong>{label}</strong><span>{room.name}</span></span>
+                                </div>
+                              ))}
+                              {displayDestinationCabinMarkers.map((cabin) => (
+                                <div aria-label={`Teacher cabin: ${cabin.name} for ${cabin.teacherName}`} className="user-cabin-marker is-destination" key={cabin._id} role="img" style={{ left: `${cabin.x}%`, top: `${cabin.y}%` }}>
+                                  <span className="user-cabin-marker-pin" /><span className="user-cabin-marker-label"><strong>Destination</strong><span>{cabin.teacherName}</span></span>
+                                </div>
+                              ))}
+                            </>
+                          )}
                         </div>
                       </div>
                     ) : <div className="user-empty-state compact"><span>⌁</span><strong>No map image available</strong><p>This floor has no uploaded floor plan.</p></div>}

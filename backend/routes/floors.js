@@ -101,23 +101,51 @@ router.post('/', upload.single('mapImage'), async (req, res) => {
   }
 })
 
+function imageEtag(file) {
+  const uploadedAt = file.uploadDate ? new Date(file.uploadDate).getTime() : 0
+  return `"${file._id}-${file.length}-${uploadedAt}"`
+}
+
+function etagMatches(ifNoneMatch, etag) {
+  if (!ifNoneMatch) {
+    return false
+  }
+  return ifNoneMatch
+    .split(',')
+    .some((candidate) => candidate.trim().replace(/^W\//, '') === etag.replace(/^W\//, ''))
+}
+
 router.get('/:id/image', async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    res.set('Cache-Control', 'no-store')
     return res.status(400).json({ message: 'Invalid floor ID.' })
   }
   const floor = await Floor.findById(req.params.id).select('mapImageFileId')
   if (!floor || !floor.mapImageFileId) {
+    res.set('Cache-Control', 'no-store')
     return res.status(404).json({ message: 'Floor image not found.' })
   }
   const file = await getFile(floor.mapImageFileId)
   if (!file) {
+    res.set('Cache-Control', 'no-store')
     return res.status(404).json({ message: 'Floor image not found.' })
   }
+  const etag = imageEtag(file)
+  res.set('Cache-Control', 'private, max-age=0, must-revalidate')
+  res.set('ETag', etag)
+  if (file.uploadDate) {
+    res.set('Last-Modified', new Date(file.uploadDate).toUTCString())
+  }
+  if (etagMatches(req.headers['if-none-match'], etag)) {
+    return res.status(304).end()
+  }
   res.type(file.metadata?.contentType || 'application/octet-stream')
-  res.set('Cache-Control', 'no-store')
   openDownloadStream(floor.mapImageFileId).on('error', (error) => {
     console.error(`GridFS download failed for ${floor.mapImageFileId}:`, error.message)
-    if (!res.headersSent) res.status(404).end()
+    if (!res.headersSent) {
+      res.set('Cache-Control', 'no-store')
+      res.status(404).end()
+    }
   }).pipe(res)
 })
 
