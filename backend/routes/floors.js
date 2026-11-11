@@ -1,6 +1,7 @@
 const express = require('express')
 const multer = require('multer')
 const mongoose = require('mongoose')
+const sharp = require('sharp')
 const Building = require('../models/Building')
 const Floor = require('../models/Floor')
 const Node = require('../models/Node')
@@ -63,6 +64,7 @@ router.post('/', upload.single('mapImage'), async (req, res) => {
   }
 
   let uploadedImage = null
+  let uploadedPreview = null
   let createdFloor = null
   try {
     if (req.file) {
@@ -70,6 +72,15 @@ router.post('/', upload.single('mapImage'), async (req, res) => {
         req.file.buffer,
         req.file.mimetype,
         req.file.originalname,
+      )
+      uploadedPreview = await uploadImage(
+        await sharp(req.file.buffer)
+          .rotate()
+          .resize({ width: 1200, withoutEnlargement: true })
+          .webp({ quality: 72 })
+          .toBuffer(),
+        'image/webp',
+        `${req.file.originalname}.preview.webp`,
       )
     }
 
@@ -80,15 +91,20 @@ router.post('/', upload.single('mapImage'), async (req, res) => {
       floorNumber: req.body.floorNumber,
       mapImage: uploadedImage ? '' : req.body.mapImage,
       ...(uploadedImage ? { mapImageFileId: uploadedImage } : {}),
+      ...(uploadedPreview ? { mapImagePreviewFileId: uploadedPreview } : {}),
     })
     if (uploadedImage) {
       createdFloor.mapImage = `/api/floors/${createdFloor._id}/image`
+      createdFloor.mapImagePreview = `/api/floors/${createdFloor._id}/preview`
       await createdFloor.save()
     }
     res.status(201).json(createdFloor)
   } catch (saveError) {
     if (uploadedImage) {
       reportOrphanCandidate(uploadedImage, 'failed floor write; retained for deferred reference audit')
+    }
+    if (uploadedPreview) {
+      reportOrphanCandidate(uploadedPreview, 'failed floor write; retained for deferred reference audit')
     }
     if (createdFloor) {
       try {
@@ -149,6 +165,40 @@ router.get('/:id/image', async (req, res) => {
   }).pipe(res)
 })
 
+router.get('/:id/preview', async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    res.set('Cache-Control', 'no-store')
+    return res.status(400).json({ message: 'Invalid floor ID.' })
+  }
+  const floor = await Floor.findById(req.params.id).select('mapImagePreviewFileId')
+  if (!floor || !floor.mapImagePreviewFileId) {
+    res.set('Cache-Control', 'no-store')
+    return res.status(404).json({ message: 'Floor preview not found.' })
+  }
+  const file = await getFile(floor.mapImagePreviewFileId)
+  if (!file) {
+    res.set('Cache-Control', 'no-store')
+    return res.status(404).json({ message: 'Floor preview not found.' })
+  }
+  const etag = imageEtag(file)
+  res.set('Cache-Control', 'private, max-age=0, must-revalidate')
+  res.set('ETag', etag)
+  if (file.uploadDate) {
+    res.set('Last-Modified', new Date(file.uploadDate).toUTCString())
+  }
+  if (etagMatches(req.headers['if-none-match'], etag)) {
+    return res.status(304).end()
+  }
+  res.type(file.metadata?.contentType || 'image/webp')
+  openDownloadStream(floor.mapImagePreviewFileId).on('error', (error) => {
+    console.error(`GridFS preview download failed for ${floor.mapImagePreviewFileId}:`, error.message)
+    if (!res.headersSent) {
+      res.set('Cache-Control', 'no-store')
+      res.status(404).end()
+    }
+  }).pipe(res)
+})
+
 router.patch('/:id/image', upload.single('mapImage'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ message: 'A map image file is required.' })
@@ -164,18 +214,37 @@ router.patch('/:id/image', upload.single('mapImage'), async (req, res) => {
     req.file.mimetype,
     req.file.originalname,
   )
+  let uploadedPreview
   const previousImageId = floor.mapImageFileId
+  const previousPreviewId = floor.mapImagePreviewFileId
   try {
+    uploadedPreview = await uploadImage(
+      await sharp(req.file.buffer)
+        .rotate()
+        .resize({ width: 1200, withoutEnlargement: true })
+        .webp({ quality: 72 })
+        .toBuffer(),
+      'image/webp',
+      `${req.file.originalname}.preview.webp`,
+    )
     floor.mapImage = `/api/floors/${floor._id}/image`
     floor.mapImageFileId = uploadedImage
+    floor.mapImagePreview = `/api/floors/${floor._id}/preview`
+    floor.mapImagePreviewFileId = uploadedPreview
     await floor.save()
   } catch (saveError) {
     reportOrphanCandidate(uploadedImage, 'failed replacement write; retained for deferred reference audit')
+    if (uploadedPreview) {
+      reportOrphanCandidate(uploadedPreview, 'failed replacement write; retained for deferred reference audit')
+    }
     throw saveError
   }
 
   if (previousImageId && String(previousImageId) !== String(uploadedImage)) {
     reportOrphanCandidate(previousImageId, 'replaced floor image retained for deferred safe cleanup')
+  }
+  if (previousPreviewId && String(previousPreviewId) !== String(uploadedPreview)) {
+    reportOrphanCandidate(previousPreviewId, 'replaced floor preview retained for deferred safe cleanup')
   }
   res.json(floor)
 })
@@ -242,6 +311,9 @@ router.delete('/:id', async (req, res) => {
 
   if (floor.mapImageFileId) {
     reportOrphanCandidate(floor.mapImageFileId, 'deleted floor image retained for deferred safe cleanup')
+  }
+  if (floor.mapImagePreviewFileId) {
+    reportOrphanCandidate(floor.mapImagePreviewFileId, 'deleted floor preview retained for deferred safe cleanup')
   }
   res.json({ message: 'Floor deleted.' })
 })

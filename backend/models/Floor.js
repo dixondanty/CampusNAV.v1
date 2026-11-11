@@ -27,6 +27,14 @@ const floorSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     default: null,
   },
+  mapImagePreview: {
+    type: String,
+    default: '',
+  },
+  mapImagePreviewFileId: {
+    type: mongoose.Schema.Types.ObjectId,
+    default: null,
+  },
 })
 
 module.exports = mongoose.model('Floor', floorSchema)

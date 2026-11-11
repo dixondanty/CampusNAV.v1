@@ -17,7 +17,68 @@ async function readResponse(response) {
   return data
 }
 
+function versionedMapImageUrl(serverUrl, imagePath, fileId) {
+  const url = mapImageUrl(serverUrl, imagePath)
+  if (!url || !fileId) {
+    return url
+  }
+  return `${url}${url.includes('?') ? '&' : '?'}v=${encodeURIComponent(String(fileId))}`
+}
+
 let roomsBootstrapRequest
+const decodedMapImages = new Map()
+const decodedMapImagesReady = new Set()
+const decodedMapImageSources = new Map()
+const decodedMapImageObjects = new Map()
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    decodedMapImageSources.forEach((sourceUrl) => URL.revokeObjectURL(sourceUrl))
+  }, { once: true })
+}
+
+function loadDecodedMapImage(url, retainSource = false) {
+  if (!url) {
+    return Promise.reject(new Error('Map image URL is missing.'))
+  }
+  const cached = decodedMapImages.get(url)
+  if (cached) {
+    return cached
+  }
+  const image = new Image()
+  decodedMapImageObjects.set(url, image)
+  const promise = new Promise((resolve, reject) => {
+    image.onload = async () => {
+      try {
+        await image.decode()
+      } catch {
+        // The image is already loaded; browsers without a usable decode() can continue.
+      }
+      decodedMapImagesReady.add(url)
+      resolve(url)
+    }
+    image.onerror = () => reject(new Error(`Map image failed to load: ${url}`))
+  })
+  decodedMapImages.set(url, promise)
+  if (retainSource) {
+    fetch(url)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Map image request failed with status ${response.status}.`)
+        }
+        return response.blob()
+      })
+      .then((blob) => {
+        const sourceUrl = URL.createObjectURL(blob)
+        decodedMapImageSources.set(url, sourceUrl)
+        image.src = sourceUrl
+      })
+      .catch(reject)
+  } else {
+    image.src = url
+  }
+  return promise
+}
 
 function loadRoomsBootstrap() {
   if (!roomsBootstrapRequest) {
@@ -51,6 +112,8 @@ function UserPage() {
   const [maxMapZoom, setMaxMapZoom] = useState(1)
   const [errorMapImageUrl, setErrorMapImageUrl] = useState('')
   const [loadedMapImageUrl, setLoadedMapImageUrl] = useState('')
+  const [mapImageStates, setMapImageStates] = useState({})
+  const mapImageStatesRef = useRef(mapImageStates)
   const [isMapPanning, setIsMapPanning] = useState(false)
   const mapStageRef = useRef(null)
   const mapImageRef = useRef(null)
@@ -103,8 +166,11 @@ function UserPage() {
     buildings.forEach((building) => byId.set(building._id, building.name))
     return byId
   }, [buildings])
-  const displayFloors = [...floors].sort(
-    (first, second) => Number(first.floorNumber) - Number(second.floorNumber),
+  const displayFloors = useMemo(
+    () => [...floors].sort(
+      (first, second) => Number(first.floorNumber) - Number(second.floorNumber),
+    ),
+    [floors],
   )
   const searchFloors = useMemo(
     () => floors.map((floor) => {
@@ -174,9 +240,176 @@ function UserPage() {
   const selectedDisplayFloor = contextFloors.find(
     (floor) => String(floor._id) === selectedDisplayFloorId,
   ) || contextFloors[0] || null
-  const currentMapImageUrl = selectedDisplayFloor?.mapImage ? mapImageUrl(SERVER_URL, selectedDisplayFloor.mapImage) : ''
-  const mapIsReady = Boolean(currentMapImageUrl) && loadedMapImageUrl === currentMapImageUrl && errorMapImageUrl !== currentMapImageUrl
+  const currentMapImageUrl = selectedDisplayFloor?.mapImage
+    ? versionedMapImageUrl(SERVER_URL, selectedDisplayFloor.mapImage, selectedDisplayFloor.mapImageFileId)
+    : ''
+  const currentMapImagePreviewUrl = selectedDisplayFloor?.mapImagePreview
+    ? versionedMapImageUrl(SERVER_URL, selectedDisplayFloor.mapImagePreview, selectedDisplayFloor.mapImagePreviewFileId)
+    : ''
+  const currentMapImageState = selectedDisplayFloor
+    ? mapImageStates[String(selectedDisplayFloor._id)] || {}
+    : {}
+  const cachedOriginalSource = currentMapImageState.originalDisplayUrl ||
+    decodedMapImageSources.get(currentMapImageUrl) ||
+    currentMapImageUrl
+  const originalIsReady = Boolean(currentMapImageUrl) && (
+    currentMapImageState.originalReady ||
+    decodedMapImagesReady.has(currentMapImageUrl)
+  )
+  const displayMapImageUrl = originalIsReady
+    ? cachedOriginalSource
+    : currentMapImagePreviewUrl && !currentMapImageState.previewFailed
+      ? currentMapImagePreviewUrl
+      : currentMapImageUrl
+  const mapIsReady = Boolean(displayMapImageUrl) &&
+    loadedMapImageUrl === displayMapImageUrl &&
+    errorMapImageUrl !== displayMapImageUrl
   const routeNodes = route?.path || []
+
+  const originalQueueRef = useRef([])
+  const originalQueuedRef = useRef(new Set())
+  const originalActiveRef = useRef('')
+  const originalLoadingRef = useRef(false)
+  const selectedFloorIdRef = useRef(selectedDisplayFloorId)
+
+  useEffect(() => {
+    selectedFloorIdRef.current = selectedDisplayFloor
+      ? String(selectedDisplayFloor._id)
+      : selectedDisplayFloorId
+  }, [selectedDisplayFloor, selectedDisplayFloorId])
+
+  const updateMapImageState = useCallback((floorId, update) => {
+    setMapImageStates((current) => {
+      const previous = current[floorId] || {}
+      const next = { ...previous, ...update }
+      const unchanged = Object.keys(next).every((key) => next[key] === previous[key]) &&
+        Object.keys(previous).every((key) => previous[key] === next[key])
+      return unchanged
+        ? current
+        : (() => {
+          const updated = { ...current, [floorId]: next }
+          mapImageStatesRef.current = updated
+          return updated
+        })()
+    })
+  }, [])
+
+  const processOriginalQueue = useCallback(async () => {
+    if (originalLoadingRef.current) {
+      return
+    }
+    originalLoadingRef.current = true
+    try {
+      while (originalQueueRef.current.length > 0) {
+        const selectedIndex = originalQueueRef.current.findIndex(
+          (item) => item.floorId === selectedFloorIdRef.current,
+        )
+        const item = originalQueueRef.current.splice(selectedIndex >= 0 ? selectedIndex : 0, 1)[0]
+        originalQueuedRef.current.delete(item.url)
+        originalActiveRef.current = item.url
+        try {
+          await loadDecodedMapImage(item.url, true)
+          updateMapImageState(item.floorId, {
+            originalReady: true,
+            originalFailed: false,
+            originalDisplayUrl: decodedMapImageSources.get(item.url) || item.url,
+          })
+        } catch {
+          updateMapImageState(item.floorId, { originalReady: false, originalFailed: true })
+          if (item.floorId === selectedFloorIdRef.current) {
+            setErrorMapImageUrl((current) => current || item.url)
+          }
+        } finally {
+          originalActiveRef.current = ''
+        }
+      }
+    } finally {
+      originalLoadingRef.current = false
+    }
+  }, [updateMapImageState])
+
+  const enqueueOriginal = useCallback((floor, priority = false) => {
+    const floorId = String(floor._id)
+    const url = floor.mapImage
+      ? versionedMapImageUrl(SERVER_URL, floor.mapImage, floor.mapImageFileId)
+      : ''
+    if (
+      !url ||
+      mapImageStatesRef.current[floorId]?.originalReady ||
+      decodedMapImagesReady.has(url) ||
+      originalQueuedRef.current.has(url) ||
+      originalActiveRef.current === url
+    ) {
+      return
+    }
+    originalQueuedRef.current.add(url)
+    const item = { floorId, url }
+    if (priority) {
+      originalQueueRef.current.unshift(item)
+    } else {
+      originalQueueRef.current.push(item)
+    }
+    processOriginalQueue()
+  }, [processOriginalQueue])
+
+  useEffect(() => {
+    let active = true
+    contextFloors.forEach((floor) => {
+      const floorId = String(floor._id)
+      const originalUrl = floor.mapImage
+        ? versionedMapImageUrl(SERVER_URL, floor.mapImage, floor.mapImageFileId)
+        : ''
+      const previewUrl = floor.mapImagePreview
+        ? versionedMapImageUrl(SERVER_URL, floor.mapImagePreview, floor.mapImagePreviewFileId)
+        : ''
+      setMapImageStates((current) => {
+        const previous = current[floorId]
+        const sameOriginal = previous?.originalUrl === originalUrl
+        const samePreview = previous?.previewUrl === previewUrl
+        const nextState = {
+          ...previous,
+          originalUrl,
+          previewUrl,
+          originalReady: sameOriginal ? previous?.originalReady : false,
+          originalFailed: sameOriginal ? previous?.originalFailed : false,
+          originalDisplayUrl: sameOriginal ? previous?.originalDisplayUrl : '',
+          previewReady: samePreview ? previous?.previewReady : false,
+          previewFailed: samePreview ? previous?.previewFailed : false,
+        }
+        const unchanged = previous &&
+          Object.keys(nextState).every((key) => nextState[key] === previous[key]) &&
+          Object.keys(previous).every((key) => previous[key] === nextState[key])
+        if (unchanged) {
+          return current
+        }
+        const updated = {
+          ...current,
+          [floorId]: nextState,
+        }
+        mapImageStatesRef.current = updated
+        return updated
+      })
+      if (previewUrl) {
+        loadDecodedMapImage(previewUrl)
+          .then(() => {
+            if (active) {
+              updateMapImageState(floorId, { previewReady: true, previewFailed: false })
+            }
+          })
+          .catch(() => {
+            if (active) {
+              updateMapImageState(floorId, { previewReady: false, previewFailed: true })
+            }
+          })
+          .finally(() => enqueueOriginal(floor, floorId === selectedFloorIdRef.current))
+      } else {
+        enqueueOriginal(floor, floorId === selectedFloorIdRef.current)
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [contextFloors, selectedDisplayFloorId, enqueueOriginal, updateMapImageState])
 
   function resetMapView() {
     setMapView({ zoom: 1, panX: 0, panY: 0 })
@@ -208,7 +441,7 @@ function UserPage() {
   }
 
   function handleMapImageLoad() {
-    setLoadedMapImageUrl(currentMapImageUrl)
+    setLoadedMapImageUrl(displayMapImageUrl)
     updateMapZoomLimit()
   }
 
@@ -834,13 +1067,13 @@ function UserPage() {
                           <img
                             alt={`${selectedDisplayFloor.name} route map`}
                             className="user-route-map-image"
-                            key={`${selectedDisplayFloor._id}-${selectedDisplayFloor.mapImageFileId || selectedDisplayFloor.mapImage}`}
-                            onError={() => setErrorMapImageUrl(currentMapImageUrl)}
+                            key={`${selectedDisplayFloor._id}-${selectedDisplayFloor.mapImageFileId || selectedDisplayFloor.mapImage}-${displayMapImageUrl}`}
+                            onError={() => setErrorMapImageUrl(displayMapImageUrl)}
                             onLoad={handleMapImageLoad}
                             ref={handleMapImageRef}
-                            src={mapImageUrl(SERVER_URL, selectedDisplayFloor.mapImage)}
+                            src={displayMapImageUrl}
                           />
-                          {errorMapImageUrl && errorMapImageUrl === currentMapImageUrl && (
+                          {errorMapImageUrl && errorMapImageUrl === displayMapImageUrl && (
                             <p className="user-navigation-error map-image-error" role="alert">
                               This floor map could not be loaded. Please ask an administrator to replace it.
                             </p>
