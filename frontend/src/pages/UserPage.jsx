@@ -98,7 +98,7 @@ function UserPage() {
   const [cabins, setCabins] = useState([])
   const [floors, setFloors] = useState([])
   const [buildings, setBuildings] = useState([])
-  const [selectedContextId, setSelectedContextId] = useState('all')
+  const [selectedContextId, setSelectedContextId] = useState('')
   const [selectedDisplayFloorId, setSelectedDisplayFloorId] = useState('')
   const [startNodeId, setStartNodeId] = useState('')
   const [endNodeId, setEndNodeId] = useState('')
@@ -191,7 +191,6 @@ function UserPage() {
   )
   const mapContexts = useMemo(
     () => [
-      { id: 'all', name: 'All maps', meta: `${floors.length} floors` },
       { id: 'campus', name: 'Campus Map', meta: `${floors.filter((floor) => floor.context === 'campus').length} maps` },
       ...buildings.map((building) => ({
         id: String(building._id),
@@ -201,13 +200,14 @@ function UserPage() {
     ],
     [buildings, floors],
   )
+  const activeContextId = mapContexts.some((context) => context.id === selectedContextId)
+    ? selectedContextId
+    : mapContexts[0]?.id || ''
   const contextFloors = useMemo(
-    () => selectedContextId === 'all'
-      ? displayFloors
-      : displayFloors.filter((floor) => selectedContextId === 'campus'
+    () => displayFloors.filter((floor) => activeContextId === 'campus'
         ? floor.context === 'campus'
-        : String(floor.buildingId?._id || floor.buildingId) === selectedContextId),
-    [displayFloors, selectedContextId],
+        : String(floor.buildingId?._id || floor.buildingId) === activeContextId),
+    [activeContextId, displayFloors],
   )
   const locationGroups = useMemo(
     () => groupNodesByFloor(
@@ -416,6 +416,12 @@ function UserPage() {
   }
 
   function setDisplayFloor(floorId) {
+    const currentFloorId = selectedDisplayFloor
+      ? String(selectedDisplayFloor._id)
+      : selectedDisplayFloorId
+    if (String(floorId) === currentFloorId) {
+      return
+    }
     setErrorMapImageUrl('')
     setLoadedMapImageUrl('')
     resetMapView()
@@ -615,7 +621,41 @@ function UserPage() {
     const contextLabel = floor.context === 'campus'
       ? 'Campus'
       : buildingNameById.get(buildingId) || 'Building'
-    return `${contextLabel} · ${floor.name}`
+    const buildingWords = contextLabel.split(/\s+/).filter(Boolean)
+    const abbreviationCandidates = [
+      buildingWords.map((word) => word[0]).join(''),
+      ...buildingWords.filter((word) => /^[A-Z]{2,}$/.test(word)),
+    ]
+      .filter(Boolean)
+      .sort((first, second) => second.length - first.length)
+    const floorName = abbreviationCandidates.reduce((name, abbreviation) => {
+      const prefix = `${abbreviation} `
+      return name.toLocaleLowerCase().startsWith(prefix.toLocaleLowerCase())
+        ? name.slice(prefix.length)
+        : name
+    }, floor.name)
+    return `${contextLabel} · ${floorName}`
+  }
+
+  function getFloorTransitionMessage(fromNode, toNode, fromFloor, toFloor) {
+    const destinationLabel = getFloorMapLabel(String(toFloor?._id)) || toFloor?.name || 'the next floor'
+    const fromLevel = Number(fromFloor?.floorNumber)
+    const toLevel = Number(toFloor?.floorNumber)
+    const direction = Number.isFinite(fromLevel) && Number.isFinite(toLevel)
+      ? toLevel > fromLevel
+        ? 'up'
+        : toLevel < fromLevel
+          ? 'down'
+          : ''
+      : ''
+    const usesStaircase = [fromNode, toNode].some((node) => node?.type === 'stair')
+
+    if (usesStaircase) {
+      return direction
+        ? `Take the staircase ${direction} to ${destinationLabel}.`
+        : `Take the staircase to ${destinationLabel}.`
+    }
+    return `Continue to ${destinationLabel}.`
   }
 
   const transitions = routeNodes.slice(0, -1).flatMap((node, index) => {
@@ -629,8 +669,7 @@ function UserPage() {
     return [{
       key: `${node._id}-${nextNode._id}`,
       afterFloorId: String(node.floorId),
-      message: `Continue via stairs to ${nextFloor?.name || 'the next floor'}.`,
-      detail: `${node.name} → ${nextNode.name}${currentFloor && nextFloor ? ` (${currentFloor.name} to ${nextFloor.name})` : ''}`,
+      message: getFloorTransitionMessage(node, nextNode, currentFloor, nextFloor),
     }]
   })
 
@@ -644,9 +683,7 @@ function UserPage() {
 
   function selectContext(contextId) {
     setSelectedContextId(contextId)
-    const nextFloors = contextId === 'all'
-      ? displayFloors
-      : displayFloors.filter((floor) => contextId === 'campus'
+    const nextFloors = displayFloors.filter((floor) => contextId === 'campus'
         ? floor.context === 'campus'
         : String(floor.buildingId?._id || floor.buildingId) === contextId)
     setDisplayFloor(nextFloors[0] ? String(nextFloors[0]._id) : '')
@@ -777,12 +814,15 @@ function UserPage() {
     if (!routeFloorNames.some((item) => item.id === floorId)) {
       const floor = floorById.get(floorId)
       if (floor) {
-        routeFloorNames.push({ id: floorId, name: floor.name })
+        routeFloorNames.push({ id: floorId, name: getFloorMapLabel(floorId) || floor.name })
       }
     }
   }
   const displayFloorId = selectedDisplayFloor ? String(selectedDisplayFloor._id) : ''
   const displaySegments = displayFloorId ? floorSegments(displayFloorId) : []
+  const destinationFloorId = routeNodes.length > 0
+    ? getNodeFloorId(routeNodes[routeNodes.length - 1])
+    : ''
   const displayRoomMarkers = route
     ? [
         { room: selectedStartRoom, label: 'Start', className: 'is-start' },
@@ -812,14 +852,13 @@ function UserPage() {
       ? activeRouteGuidanceEdges
       : displaySegments
   const missingFloorInRoute = routeNodes.some((node) => !floorById.get(getNodeFloorId(node)))
+  const routeGuidanceMatchesDisplay = activeRouteGuidanceFloorId === displayFloorId
+  const isDestinationDisplayFloor = displayFloorId === destinationFloorId
   const routeGuidanceCue = (() => {
-    if (!activeRouteGuidanceSegment || activeRouteSegmentIndex === 0) {
+    if (!activeRouteGuidanceSegment || !routeGuidanceMatchesDisplay) {
       return ''
     }
-    const previousSegment = routeGuidanceSegments[activeRouteSegmentIndex - 1]
-    const entryNode = previousSegment?.nodes[previousSegment.nodes.length - 1]
-    const label = getFloorMapLabel(activeRouteGuidanceFloorId) || 'the next map'
-    return entryNode ? `Continue via ${entryNode.name} → ${label}` : `Continue to ${label}`
+    return transitions.find((transition) => transition.afterFloorId === activeRouteGuidanceFloorId)?.message || ''
   })()
 
   return (
@@ -849,9 +888,8 @@ function UserPage() {
       <div className="user-navigation-content">
         <section className="user-navigation-intro">
           <div>
-            <p className="user-navigation-kicker">INDOOR WAYFINDING / 01</p>
-            <h1>Find your way.</h1>
-            <p>Plan a precise route across rooms, entrances, and campus floors.</p>
+            <h1>Navigation Guide</h1>
+            <p>Select a building and floor, enter your starting point and destination, then select Find Route to view the navigation path.</p>
           </div>
         </section>
 
@@ -863,7 +901,6 @@ function UserPage() {
                   <span className="user-section-index">ROUTE PLANNER</span>
                   <h2>Set your course</h2>
                 </div>
-                <span className="user-card-signal">● READY</span>
               </div>
               <form onSubmit={handleNavigate}>
                 <label className="user-navigation-field">
@@ -954,8 +991,8 @@ function UserPage() {
               <div className="user-context-list">
                 {mapContexts.map((context) => (
                   <button
-                    aria-pressed={selectedContextId === context.id}
-                    className={`user-context-button${selectedContextId === context.id ? ' is-active' : ''}`}
+                    aria-pressed={activeContextId === context.id}
+                    className={`user-context-button${activeContextId === context.id ? ' is-active' : ''}`}
                     key={context.id}
                     onClick={() => selectContext(context.id)}
                     type="button"
@@ -972,7 +1009,7 @@ function UserPage() {
             <div className="user-map-header">
               <div>
                 <span className="user-section-index">NAVIGATION VIEW</span>
-                <h2>{selectedDisplayFloor ? selectedDisplayFloor.name : 'Select a floor'}</h2>
+                <h2>{selectedDisplayFloor ? getFloorMapLabel(String(selectedDisplayFloor._id)) : 'Select a floor'}</h2>
               </div>
               {route && (
                 <span className="user-route-live"><i /> Route active</span>
@@ -981,14 +1018,14 @@ function UserPage() {
             {route && (
               <div className="user-route-summary">
                 <div className="user-summary-title">
-                  <span className="user-section-index">ACTIVE ROUTE</span>
-                  <strong>{routeFloorNames.length} {routeFloorNames.length === 1 ? 'floor' : 'floors'} / {route.path.length} points</strong>
+                  <span className="user-section-index">YOUR ROUTE</span>
+                  <strong>{routeFloorNames.length} {routeFloorNames.length === 1 ? 'floor' : 'floors'}</strong>
                 </div>
                 <div className="user-route-summary-details">
                   <div><span>From</span><strong>{selectedLocation(selectedStartRoom, selectedStartEntrance, selectedStartCabin)}</strong></div>
                   <div><span>To</span><strong>{selectedLocation(selectedEndRoom, selectedEndEntrance, selectedEndCabin)}</strong></div>
                   <div><span>Distance</span><strong>{Number(route.distance).toFixed(2)} units</strong></div>
-                  <div><span>Path</span><strong>{routeFloorNames.map((floor) => floor.name).join(' → ')}</strong></div>
+                  <div><span>Floors along your route</span><strong>{routeFloorNames.map((floor) => floor.name).join(' → ')}</strong></div>
                 </div>
                 {missingFloorInRoute && <p className="user-navigation-message">A floor in this route is no longer available. Some maps may be missing.</p>}
               </div>
@@ -996,9 +1033,8 @@ function UserPage() {
             {route && routeGuidanceSegments.length > 1 && (
               <section aria-label="Route map guide" className="user-route-guidance">
                 <div className="user-route-guidance-step">
-                  <span className="user-route-guidance-indicator">MAP {activeRouteSegmentIndex + 1} / {routeGuidanceSegments.length}</span>
-                  <span className="user-route-guidance-map">{getFloorMapLabel(activeRouteGuidanceFloorId) || 'Unavailable floor'}</span>
-                  {activeRouteSegmentIndex === routeGuidanceSegments.length - 1 && <span className="user-route-guidance-arrival">Arrived at destination</span>}
+                  <span className="user-route-guidance-indicator">Current floor: {getFloorMapLabel(activeRouteGuidanceFloorId) || 'Unavailable floor'}</span>
+                  {routeGuidanceMatchesDisplay && isDestinationDisplayFloor && <span className="user-route-guidance-arrival">Your destination is on this floor.</span>}
                 </div>
                 {routeGuidanceCue && <p className="user-stair-transition">{routeGuidanceCue}</p>}
                 <div className="user-route-guidance-actions">
@@ -1012,17 +1048,27 @@ function UserPage() {
             )}
             {contextFloors.length > 0 && (
               <div className="user-route-viewer">
-                <nav aria-label="Select floor" className="user-floor-selector">
-                  <div className="user-floor-heading"><span>FLOORS</span><small>{contextFloors.length}</small></div>
-                  {contextFloors.map((floor) => {
-                    const floorId = String(floor._id)
-                    return (
-                      <button aria-pressed={selectedDisplayFloor?._id === floor._id} className={`user-floor-button${selectedDisplayFloor?._id === floor._id ? ' is-active' : ''}`} key={floorId} onClick={() => setDisplayFloor(floorId)} type="button">
-                        <span>{floor.name}</span><small>{floor.context === 'campus' ? 'Campus' : `Floor ${floor.floorNumber}`}</small>
-                      </button>
-                    )
-                  })}
-                </nav>
+                {activeContextId !== 'campus' && (
+                  <nav aria-label="Select floor" className="user-floor-selector">
+                    {contextFloors.map((floor) => {
+                      const floorId = String(floor._id)
+                      const floorNumber = Number(floor.floorNumber) === 0 ? 'G' : floor.floorNumber
+                      return (
+                        <button
+                          aria-label={`${floor.name}, floor ${floorNumber}`}
+                          aria-pressed={selectedDisplayFloor?._id === floor._id}
+                          className={`user-floor-button${selectedDisplayFloor?._id === floor._id ? ' is-active' : ''}`}
+                          key={floorId}
+                          onClick={() => setDisplayFloor(floorId)}
+                          type="button"
+                        >
+                          <strong>{floorNumber}</strong>
+                          <span>{floor.name}</span>
+                        </button>
+                      )
+                    })}
+                  </nav>
+                )}
                 {selectedDisplayFloor && (
                   <section aria-label={`${selectedDisplayFloor.name} map`} className="user-route-floor">
                     {selectedDisplayFloor.mapImage ? (
@@ -1098,7 +1144,11 @@ function UserPage() {
                         </div>
                       </div>
                     ) : <div className="user-empty-state compact"><span>⌁</span><strong>No map image available</strong><p>This floor has no uploaded floor plan.</p></div>}
-                    {transitions.filter((transition) => transition.afterFloorId === displayFloorId).map((transition) => <p className="user-stair-transition" key={transition.key}>{transition.message}</p>)}
+                    {(!routeGuidanceMatchesDisplay || routeGuidanceSegments.length <= 1) && (
+                      isDestinationDisplayFloor
+                        ? <p className="user-stair-transition">Your destination is on this floor.</p>
+                        : transitions.filter((transition) => transition.afterFloorId === displayFloorId).map((transition) => <p className="user-stair-transition" key={transition.key}>{transition.message}</p>)
+                    )}
                   </section>
                 )}
               </div>
