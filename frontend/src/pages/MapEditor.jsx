@@ -91,6 +91,14 @@ function MapEditor() {
   const [entranceName, setEntranceName] = useState('')
   const [entranceGroup, setEntranceGroup] = useState('')
   const [savingEntrance, setSavingEntrance] = useState(false)
+  const [skywalkPosition, setSkywalkPosition] = useState(null)
+  const [skywalkName, setSkywalkName] = useState('')
+  const [skywalkGroup, setSkywalkGroup] = useState('')
+  const [savingSkywalk, setSavingSkywalk] = useState(false)
+  const [editingConnectorFields, setEditingConnectorFields] = useState(false)
+  const [connectorTypeDraft, setConnectorTypeDraft] = useState('')
+  const [connectorGroupDraft, setConnectorGroupDraft] = useState('')
+  const [savingConnectorFields, setSavingConnectorFields] = useState(false)
   const [cabins, setCabins] = useState([])
   const [cabinPosition, setCabinPosition] = useState(null)
   const [cabinName, setCabinName] = useState('')
@@ -377,6 +385,13 @@ function MapEditor() {
   const navigationNodes = nodes.filter((node) => node.type === 'nav')
   const roomNodes = nodes.filter((node) => node.type === 'room')
   const stairNodes = nodes.filter((node) => node.type === 'stair')
+  const buildingConnectionNodes = nodes.filter((node) => node.type === 'buildingConnection')
+  const selectedMapSideLabel = selectedBuildingId === CAMPUS_SELECTION_ID
+    ? 'Campus-side'
+    : 'Building-side'
+  const remoteMapSideLabel = selectedBuildingId === CAMPUS_SELECTION_ID
+    ? 'Building-side'
+    : 'Campus-side'
   const buildingNameById = useMemo(() => {
     const byId = new Map()
     buildings.forEach((building) => byId.set(building._id, building.name))
@@ -821,26 +836,93 @@ function MapEditor() {
     let active = true
 
     async function loadOtherMapConnectors() {
+      setRemoteBuildingConnectionNodes([])
+      const pendingFloorId = String(pendingNode.floorId?._id || pendingNode.floorId)
+      const pendingFloor = floorRecords.find((floor) => floor._id === pendingFloorId)
+      const pendingGroup = typeof pendingNode.connectionGroup === 'string'
+        ? pendingNode.connectionGroup.trim()
+        : ''
+      const pendingType = typeof pendingNode.connectionType === 'string'
+        ? pendingNode.connectionType
+        : ''
       const otherContextFloors = floorRecords.filter((floor) =>
-        selectedBuildingId === CAMPUS_SELECTION_ID
-          ? floor.context === 'building'
-          : floor.context === 'campus',
+        pendingType === 'entrance'
+          ? selectedBuildingId === CAMPUS_SELECTION_ID
+            ? floor.context === 'building'
+            : floor.context === 'campus'
+          : pendingType === 'skywalk'
+            ? selectedBuildingId !== CAMPUS_SELECTION_ID &&
+              floor.context === 'building' &&
+              String(floor.buildingId?._id || floor.buildingId) !== String(selectedBuildingId)
+            : false,
       )
       try {
         const floorNodeLists = await Promise.all(
           otherContextFloors.map(async (floor) => {
+            const floorBuildingId = String(floor.buildingId?._id || floor.buildingId || '')
+            const floorContextIsValid = floor.context === 'campus'
+              ? !floorBuildingId
+              : floor.context === 'building' &&
+                Boolean(floorBuildingId) &&
+                buildings.some((building) => building._id === floorBuildingId)
             const floorNodes = await requestFloorNodes(floor._id, false)
             return floorNodes
-              .filter((node) => node.type === 'buildingConnection')
+              .filter((node) => (
+                floorContextIsValid &&
+                node.type === 'buildingConnection'
+              ))
               .map((node) => ({ ...node, floorName: floor.name, floorNumber: floor.floorNumber }))
           }),
         )
         if (active) {
-          setRemoteBuildingConnectionNodes(
-            floorNodeLists
-              .flat()
-              .filter((node) => String(node.floorId) !== String(pendingNode.floorId)),
-          )
+          const candidates = floorNodeLists
+            .flat()
+            .filter((node) => {
+              if (String(node.floorId?._id || node.floorId) === pendingFloorId) {
+                return false
+              }
+              const nodeGroup = typeof node.connectionGroup === 'string'
+                ? node.connectionGroup.trim()
+                : ''
+              if (pendingType === 'entrance') {
+                const nodeFloorId = String(node.floorId?._id || node.floorId)
+                const nodeFloor = floorRecords.find((floor) => floor._id === nodeFloorId)
+                const pendingContextValid = pendingFloor?.context === 'campus'
+                  ? !pendingFloor.buildingId
+                  : pendingFloor?.context === 'building' &&
+                    Boolean(pendingFloor.buildingId)
+                const nodeContextIsOpposite = pendingFloor?.context === 'campus'
+                  ? nodeFloor?.context === 'building'
+                  : pendingFloor?.context === 'building'
+                    ? nodeFloor?.context === 'campus'
+                    : false
+                return pendingContextValid &&
+                  nodeContextIsOpposite &&
+                  node.connectionType === 'entrance' &&
+                  Boolean(pendingGroup) &&
+                  nodeGroup === pendingGroup
+              }
+              if (pendingType === 'skywalk') {
+                const nodeFloorId = String(node.floorId?._id || node.floorId)
+                const nodeFloor = floorRecords.find((floor) => floor._id === nodeFloorId)
+                const pendingBuildingId = String(
+                  pendingFloor?.buildingId?._id || pendingFloor?.buildingId || '',
+                )
+                const nodeBuildingId = String(
+                  nodeFloor?.buildingId?._id || nodeFloor?.buildingId || '',
+                )
+                return pendingFloor?.context === 'building' &&
+                  nodeFloor?.context === 'building' &&
+                  Boolean(pendingBuildingId) &&
+                  Boolean(nodeBuildingId) &&
+                  pendingBuildingId !== nodeBuildingId &&
+                  node.connectionType === 'skywalk' &&
+                  Boolean(pendingGroup) &&
+                  nodeGroup === pendingGroup
+              }
+              return false
+            })
+          setRemoteBuildingConnectionNodes(candidates)
         }
       } catch (loadError) {
         if (active) {
@@ -848,12 +930,11 @@ function MapEditor() {
         }
       }
     }
-
     loadOtherMapConnectors()
     return () => {
       active = false
     }
-  }, [mode, connectionNodeIds, nodes, allStairNodes, selectedBuildingId, floorRecords])
+  }, [mode, connectionNodeIds, nodes, allStairNodes, selectedBuildingId, floorRecords, buildings])
 
   useEffect(() => {
     if (!selectedFloorId) {
@@ -1207,7 +1288,7 @@ function MapEditor() {
       return
     }
 
-    if (!['nav', 'room', 'stair', 'entrance', 'cabin'].includes(mode) || !selectedFloor || !mapIsReady || loadingNodes || creatingNodeRef.current) {
+    if (!['nav', 'room', 'stair', 'entrance', 'skywalk', 'cabin'].includes(mode) || !selectedFloor || !mapIsReady || loadingNodes || creatingNodeRef.current) {
       return
     }
 
@@ -1245,6 +1326,13 @@ function MapEditor() {
       setEntrancePosition({ x, y })
       setEntranceName('')
       setEntranceGroup('')
+      setError('')
+      return
+    }
+    if (mode === 'skywalk') {
+      setSkywalkPosition({ x, y })
+      setSkywalkName('')
+      setSkywalkGroup('')
       setError('')
       return
     }
@@ -1567,6 +1655,45 @@ function MapEditor() {
     }
   }
 
+  async function handleCreateSkywalk(event) {
+    event.preventDefault()
+    const connectorName = skywalkName.trim()
+    const group = skywalkGroup.trim()
+    if (!selectedFloor || selectedFloor.context !== 'building' || !skywalkPosition || !connectorName || !group || creatingNodeRef.current) {
+      return
+    }
+
+    creatingNodeRef.current = true
+    setSavingSkywalk(true)
+    setError('')
+    try {
+      const response = await fetch(`${API_URL}/nodes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: connectorName,
+          type: 'buildingConnection',
+          connectionType: 'skywalk',
+          connectionGroup: group,
+          x: skywalkPosition.x,
+          y: skywalkPosition.y,
+          floorId: selectedFloor._id,
+        }),
+      })
+      const newNode = await readResponse(response)
+      await refreshNodes(selectedFloor._id)
+      setSelectedNodeId(newNode._id)
+      setSkywalkPosition(null)
+      setSkywalkName('')
+      setSkywalkGroup('')
+    } catch (createError) {
+      setError(createError.message)
+    } finally {
+      creatingNodeRef.current = false
+      setSavingSkywalk(false)
+    }
+  }
+
   async function handleCreateEntrance(event) {
     event.preventDefault()
     const connectorName = entranceName.trim()
@@ -1755,6 +1882,46 @@ function MapEditor() {
       setError(renameError.message)
     } finally {
       setSavingRoomName(false)
+    }
+  }
+
+  async function handleSaveConnectorFields(event) {
+    event.preventDefault()
+    if (!selectedNode || selectedNode.type !== 'buildingConnection') {
+      return
+    }
+    const connectionType = connectorTypeDraft.trim()
+    const connectionGroup = connectorGroupDraft.trim()
+    if (!connectionType || !connectionGroup || savingConnectorFields) {
+      setError('Connector type and connection group are required.')
+      return
+    }
+
+    setSavingConnectorFields(true)
+    setError('')
+    try {
+      const response = await fetch(`${API_URL}/nodes/${selectedNode._id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          connectionType,
+          connectionGroup,
+        }),
+      })
+      const updatedNode = await readResponse(response)
+      await refreshNodes(selectedFloorId)
+      setNodes((currentNodes) => currentNodes.map((node) =>
+        node._id === updatedNode._id ? { ...node, ...updatedNode } : node,
+      ))
+      setAllTestNodes((currentNodes) => currentNodes.map((node) =>
+        node._id === updatedNode._id ? { ...node, ...updatedNode } : node,
+      ))
+      setEditingConnectorFields(false)
+      setSelectedNodeId(updatedNode._id)
+    } catch (saveError) {
+      setError(saveError.message)
+    } finally {
+      setSavingConnectorFields(false)
     }
   }
 
@@ -2429,6 +2596,21 @@ function MapEditor() {
             >
               Entrance
             </button>
+            {selectedFloor?.context === 'building' && (
+              <button
+                aria-pressed={mode === 'skywalk'}
+                className={`tool-button${mode === 'skywalk' ? ' is-active' : ''}`}
+                disabled={!selectedFloor?.mapImage}
+                onClick={() => {
+                  setSelectedNodeId('')
+                  setConnectionNodeIds([])
+                  setMode((current) => (current === 'skywalk' ? 'select' : 'skywalk'))
+                }}
+                type="button"
+              >
+                Skywalk
+              </button>
+            )}
             <button
               aria-pressed={mode === 'cabin'}
               className={`tool-button${mode === 'cabin' ? ' is-active' : ''}`}
@@ -2446,7 +2628,7 @@ function MapEditor() {
             <button
               aria-pressed={mode === 'connect'}
               className={`tool-button${mode === 'connect' ? ' is-active' : ''}`}
-              disabled={nodes.length + remoteStairNodes.length < 2}
+              disabled={nodes.length + remoteStairNodes.length < 2 && buildingConnectionNodes.length === 0}
               onClick={() => {
                 setSelectedNodeId('')
                 setConnectionNodeIds([])
@@ -2507,6 +2689,9 @@ function MapEditor() {
           {mode === 'entrance' && selectedFloor && (
             <p className="map-mode-hint">Entrance mode — click on the map, then enter the connector name and connection group</p>
           )}
+          {mode === 'skywalk' && selectedFloor && (
+            <p className="map-mode-hint">Skywalk mode — click on the map, then enter the connector name and connection group</p>
+          )}
           {mode === 'cabin' && selectedFloor && (
             <p className="map-mode-hint">Teacher Cabin mode — click on the map, then enter the cabin name and teacher name</p>
           )}
@@ -2526,7 +2711,7 @@ function MapEditor() {
           )}
 
           <div
-            className={`map-stage${['nav', 'room', 'stair', 'entrance', 'cabin'].includes(mode) ? ' is-placing' : ''}${isMapPanning ? ' is-panning' : ''}`}
+            className={`map-stage${['nav', 'room', 'stair', 'entrance', 'skywalk', 'cabin'].includes(mode) ? ' is-placing' : ''}${isMapPanning ? ' is-panning' : ''}`}
             onPointerCancel={handleMapPointerEnd}
             onPointerDown={handleMapPointerDown}
             onPointerMove={handleMapPointerMove}
@@ -2723,8 +2908,8 @@ function MapEditor() {
           <section className="inspector-section">
             <p className="inspector-label">Mode</p>
             <div className="mode-summary">
-              <span className={`mode-indicator${mode === 'nav' ? ' is-nav' : mode === 'room' ? ' is-room' : mode === 'stair' ? ' is-stair' : mode === 'entrance' ? ' is-entrance' : mode === 'cabin' ? ' is-cabin' : mode === 'connect' ? ' is-connect' : ''}`} />
-              {mode === 'nav' ? 'Navigation Node' : mode === 'room' ? 'Room' : mode === 'stair' ? 'Stair' : mode === 'entrance' ? 'Entrance' : mode === 'cabin' ? 'Teacher Cabin' : mode === 'connect' ? 'Connect' : mode === 'test' ? 'Test Navigation' : mode === 'delete' ? 'Delete' : 'Select'}
+              <span className={`mode-indicator${mode === 'nav' ? ' is-nav' : mode === 'room' ? ' is-room' : mode === 'stair' ? ' is-stair' : mode === 'entrance' ? ' is-entrance' : mode === 'skywalk' ? ' is-entrance' : mode === 'cabin' ? ' is-cabin' : mode === 'connect' ? ' is-connect' : ''}`} />
+              {mode === 'nav' ? 'Navigation Node' : mode === 'room' ? 'Room' : mode === 'stair' ? 'Stair' : mode === 'entrance' ? 'Entrance' : mode === 'skywalk' ? 'Skywalk' : mode === 'cabin' ? 'Teacher Cabin' : mode === 'connect' ? 'Connect' : mode === 'test' ? 'Test Navigation' : mode === 'delete' ? 'Delete' : 'Select'}
             </div>
           </section>
 
@@ -2988,6 +3173,45 @@ function MapEditor() {
             )}
           </section>
 
+          {mode === 'connect' && buildingConnectionNodes.length > 0 && (
+            <section className="inspector-section">
+              <div className="inspector-section-heading">
+                <p className="inspector-label">Building Entrances & Connectors</p>
+                <span className="node-count">{buildingConnectionNodes.length}</span>
+              </div>
+              {loadingNodes ? (
+                <p className="sidebar-message">Loading connectors…</p>
+              ) : (
+                <ul className="inspector-node-list">
+                  {buildingConnectionNodes.map((node) => {
+                    const connectorType = node.connectionType === 'entrance'
+                      ? 'Entrance'
+                      : node.connectionType === 'skywalk'
+                        ? 'Skywalk'
+                        : 'Connector'
+                    const connectorGroup = typeof node.connectionGroup === 'string'
+                      ? node.connectionGroup.trim()
+                      : ''
+                    return (
+                      <li key={node._id}>
+                        <button
+                          aria-pressed={connectionNodeIds.includes(node._id)}
+                          className={`inspector-node${connectionNodeIds.includes(node._id) ? ' is-active' : ''}`}
+                          onClick={() => handleChooseNode(node)}
+                          type="button"
+                        >
+                          <span className="inspector-node-dot" />
+                          {selectedMapSideLabel} {connectorType}
+                          {connectorGroup ? ` · ${connectorGroup}` : ''} · {node.name}
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </section>
+          )}
+
           {mode === 'connect' && remoteStairNodes.length > 0 && (
             <section className="inspector-section">
               <div className="inspector-section-heading">
@@ -3014,27 +3238,56 @@ function MapEditor() {
 
           {mode === 'connect' &&
             firstConnectionNode?.type === 'buildingConnection' &&
-            remoteBuildingConnectionNodes.length > 0 && (
+            (remoteBuildingConnectionNodes.length > 0 ||
+              firstConnectionNode.connectionType === 'entrance' ||
+              firstConnectionNode.connectionType === 'skywalk') && (
             <section className="inspector-section">
               <div className="inspector-section-heading">
-                <p className="inspector-label">Building Connectors on the Other Map</p>
+                <p className="inspector-label">
+                  {firstConnectionNode.connectionType === 'entrance'
+                    ? `${remoteMapSideLabel} Entrance Connectors`
+                    : firstConnectionNode.connectionType === 'skywalk'
+                      ? 'Skywalk Connectors in Other Buildings'
+                      : 'Building Connectors on the Other Map'}
+                </p>
                 <span className="node-count">{remoteBuildingConnectionNodes.length}</span>
               </div>
-              <ul className="inspector-node-list">
-                {remoteBuildingConnectionNodes.map((node) => (
-                  <li key={node._id}>
-                    <button
-                      aria-pressed={connectionNodeIds.includes(node._id)}
-                      className={`inspector-node${connectionNodeIds.includes(node._id) ? ' is-active' : ''}`}
-                      onClick={() => handleChooseNode(node)}
-                      type="button"
-                    >
-                      <span className="inspector-node-dot" />
-                      {node.name} · {node.floorName}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              {remoteBuildingConnectionNodes.length === 0 ? (
+                <p className="sidebar-message">
+                  {firstConnectionNode.connectionType === 'entrance'
+                    ? 'No eligible entrance connector with the selected group on the opposite map.'
+                    : firstConnectionNode.connectionType === 'skywalk'
+                      ? 'No eligible skywalk connector with the selected group in another building.'
+                      : 'No eligible building connector on the other map.'}
+                </p>
+              ) : (
+                <ul className="inspector-node-list">
+                  {remoteBuildingConnectionNodes.map((node) => {
+                    const connectorType = node.connectionType === 'entrance'
+                      ? 'Entrance'
+                      : node.connectionType === 'skywalk'
+                        ? 'Skywalk'
+                        : 'Connector'
+                    const connectorGroup = typeof node.connectionGroup === 'string'
+                      ? node.connectionGroup.trim()
+                      : ''
+                    return (
+                      <li key={node._id}>
+                        <button
+                          aria-pressed={connectionNodeIds.includes(node._id)}
+                          className={`inspector-node${connectionNodeIds.includes(node._id) ? ' is-active' : ''}`}
+                          onClick={() => handleChooseNode(node)}
+                          type="button"
+                        >
+                          <span className="inspector-node-dot" />
+                          {remoteMapSideLabel} {connectorType}
+                          {connectorGroup ? ` · ${connectorGroup}` : ''} · {node.name} · {node.floorName}
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
             </section>
           )}
 
@@ -3188,10 +3441,70 @@ function MapEditor() {
               </span>
               {selectedNode.type === 'buildingConnection' && (
                 <>
-                  <p className="inspector-label node-type-label">Connection Type</p>
-                  <span className="node-type-value">{selectedNode.connectionType}</span>
-                  <p className="inspector-label node-type-label">Connection Group</p>
-                  <span className="node-type-value">{selectedNode.connectionGroup}</span>
+                  {editingConnectorFields ? (
+                    <form className="room-rename-form" onSubmit={handleSaveConnectorFields}>
+                      <label>
+                        Connection Type
+                        <select
+                          onChange={(event) => setConnectorTypeDraft(event.target.value)}
+                          value={connectorTypeDraft}
+                        >
+                          {selectedFloor?.context === 'campus' ? (
+                            <option value="entrance">entrance</option>
+                          ) : (
+                            <>
+                              <option value="entrance">entrance</option>
+                              <option value="skywalk">skywalk</option>
+                            </>
+                          )}
+                        </select>
+                      </label>
+                      <label>
+                        Connection Group
+                        <input
+                          onChange={(event) => setConnectorGroupDraft(event.target.value)}
+                          required
+                          value={connectorGroupDraft}
+                        />
+                      </label>
+                      <div className="room-rename-actions">
+                        <button
+                          className="room-rename-save"
+                          disabled={savingConnectorFields || !connectorTypeDraft || !connectorGroupDraft.trim()}
+                          type="submit"
+                        >
+                          {savingConnectorFields ? 'Saving…' : 'Save Connector'}
+                        </button>
+                        <button
+                          className="room-rename-cancel"
+                          disabled={savingConnectorFields}
+                          onClick={() => setEditingConnectorFields(false)}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <>
+                      <p className="inspector-label node-type-label">Connection Type</p>
+                      <span className="node-type-value">{selectedNode.connectionType}</span>
+                      <p className="inspector-label node-type-label">Connection Group</p>
+                      <span className="node-type-value">{selectedNode.connectionGroup}</span>
+                      <button
+                        className="room-rename-edit"
+                        onClick={() => {
+                          setConnectorTypeDraft(selectedNode.connectionType || 'entrance')
+                          setConnectorGroupDraft(selectedNode.connectionGroup || '')
+                          setEditingConnectorFields(true)
+                          setError('')
+                        }}
+                        type="button"
+                      >
+                        Edit Connector
+                      </button>
+                    </>
+                  )}
                 </>
               )}
               {selectedNode.type === 'stair' && (
@@ -3626,6 +3939,75 @@ function MapEditor() {
                 </button>
                 <button disabled={savingEntrance} type="submit">
                   {savingEntrance ? 'Saving…' : 'Save Entrance'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+      {skywalkPosition && (
+        <div className="modal-backdrop">
+          <section
+            aria-labelledby="skywalk-group-title"
+            aria-modal="true"
+            className="floor-modal room-name-modal"
+            role="dialog"
+          >
+            <div className="modal-heading">
+              <div>
+                <p className="workspace-kicker">SKYWALK NODE</p>
+                <h2 id="skywalk-group-title">Configure skywalk connector</h2>
+              </div>
+              <button
+                aria-label="Cancel skywalk placement"
+                className="modal-close"
+                disabled={savingSkywalk}
+                onClick={() => {
+                  setSkywalkPosition(null)
+                  setSkywalkName('')
+                  setSkywalkGroup('')
+                }}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="floor-form" onSubmit={handleCreateSkywalk}>
+              <label>
+                Connector Name
+                <input
+                  autoFocus
+                  onChange={(event) => setSkywalkName(event.target.value)}
+                  placeholder="e.g. Building Skywalk"
+                  required
+                  value={skywalkName}
+                />
+              </label>
+              <label>
+                Connection group
+                <input
+                  onChange={(event) => setSkywalkGroup(event.target.value)}
+                  placeholder="e.g. MBPG"
+                  required
+                  value={skywalkGroup}
+                />
+              </label>
+              <p className="sidebar-message" role="note">Use the same skywalk connection group on the matching connector in another building.</p>
+              <div className="modal-actions">
+                <button
+                  className="modal-cancel"
+                  disabled={savingSkywalk}
+                  onClick={() => {
+                    setSkywalkPosition(null)
+                    setSkywalkName('')
+                    setSkywalkGroup('')
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button disabled={savingSkywalk} type="submit">
+                  {savingSkywalk ? 'Saving…' : 'Save Skywalk'}
                 </button>
               </div>
             </form>

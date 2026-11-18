@@ -129,16 +129,55 @@ router.post('/', async (req, res) => {
 })
 
 router.patch('/:id', async (req, res) => {
-  if (typeof req.body.name !== 'string' || !req.body.name.trim()) {
-    return res.status(400).json({ message: 'Node name cannot be empty.' })
-  }
-
   const node = await Node.findById(req.params.id)
   if (!node) {
     return res.status(404).json({ message: 'Node not found.' })
   }
 
-  node.name = req.body.name.trim()
+  if (Object.prototype.hasOwnProperty.call(req.body, 'name')) {
+    if (typeof req.body.name !== 'string' || !req.body.name.trim()) {
+      return res.status(400).json({ message: 'Node name cannot be empty.' })
+    }
+    node.name = req.body.name.trim()
+  }
+
+  if (node.type === 'buildingConnection') {
+    if (
+      Object.prototype.hasOwnProperty.call(req.body, 'connectionType') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'connectionGroup')
+    ) {
+      const fields = normalizeBuildingConnectionFields(
+        req.body.connectionType ?? node.connectionType,
+        req.body.connectionGroup ?? node.connectionGroup,
+      )
+      if (fields.error) {
+        return res.status(400).json({ message: fields.error })
+      }
+
+      const floor = await Floor.findById(node.floorId)
+      if (!floor) {
+        return res.status(404).json({ message: 'Floor not found.' })
+      }
+      const isCampusFloor = floor.context === 'campus' && !floor.buildingId
+      const isBuildingFloor = floor.context === 'building' && Boolean(floor.buildingId)
+
+      if (fields.connectionType === 'entrance') {
+        if (!isCampusFloor && !isBuildingFloor) {
+          return res.status(400).json({
+            message: 'Entrance nodes must belong to a campus map or an assigned building floor.',
+          })
+        }
+      } else if (!isBuildingFloor) {
+        return res.status(400).json({
+          message: 'Skywalk nodes must belong to an assigned building floor.',
+        })
+      }
+
+      node.connectionType = fields.connectionType
+      node.connectionGroup = fields.connectionGroup
+    }
+  }
+
   await node.save()
   res.json(node)
 })
