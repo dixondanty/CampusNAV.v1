@@ -4,7 +4,7 @@ import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx
 import buildRouteSegments from '../utils/buildRouteSegments.js'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 import mapImageUrl from '../utils/mapImageUrl.js'
-import { MAX_MAP_ZOOM, MAP_ZOOM_STEP, MIN_MAP_ZOOM, clampMapZoom } from '../utils/mapZoom.js'
+import { MAP_ZOOM_STEP, MIN_MAP_ZOOM, calculateMaxMapZoom, clampMapZoom } from '../utils/mapZoom.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const API_URL = `${SERVER_URL}/api`
@@ -26,6 +26,51 @@ const RIGHT_PANEL_COLLAPSED_KEY = 'campusnav.rightPanelCollapsed.v2'
 
 function clampPanelWidth(value, min, max) {
   return Math.max(min, Math.min(max, Math.round(value)))
+}
+
+function selectedRoomLabelPosition(selectedRoom, nodes, cabins) {
+  const markerX = Number(selectedRoom?.x)
+  const markerY = Number(selectedRoom?.y)
+  if (!Number.isFinite(markerX) || !Number.isFinite(markerY)) {
+    return 'right'
+  }
+
+  const otherMarkers = [
+    ...nodes.filter((node) => node._id !== selectedRoom._id),
+    ...cabins,
+  ]
+
+  const hasBlockingMarker = (side) => otherMarkers.some((marker) => {
+    const blockerX = Number(marker.x)
+    const blockerY = Number(marker.y)
+    if (!Number.isFinite(blockerX) || !Number.isFinite(blockerY)) {
+      return false
+    }
+    const deltaX = blockerX - markerX
+    const deltaY = blockerY - markerY
+
+    if (side === 'above') {
+      return Math.abs(deltaX) < 16 && deltaY < 0 && deltaY > -18
+    }
+    if (side === 'right') {
+      return deltaX > 2 && deltaX < 24 && Math.abs(deltaY) < 12
+    }
+    if (side === 'left') {
+      return deltaX < -2 && deltaX > -24 && Math.abs(deltaY) < 12
+    }
+    return Math.abs(deltaX) < 16 && deltaY > 2 && deltaY < 18
+  })
+
+  if (markerY >= 18 && !hasBlockingMarker('above')) {
+    return 'above'
+  }
+  if (markerX <= 82 && !hasBlockingMarker('right')) {
+    return 'right'
+  }
+  if (markerX >= 18 && !hasBlockingMarker('left')) {
+    return 'left'
+  }
+  return 'below'
 }
 
 function readStoredPanelNumber(key, fallback) {
@@ -1394,7 +1439,13 @@ function MapEditor() {
       return
     }
 
-    const nextLimit = MAX_MAP_ZOOM
+    const nextLimit = calculateMaxMapZoom({
+      naturalWidth: image.naturalWidth,
+      naturalHeight: image.naturalHeight,
+      clientWidth: image.clientWidth,
+      clientHeight: image.clientHeight,
+      devicePixelRatio: window.devicePixelRatio,
+    })
     setMaxMapZoom((currentLimit) => (
       Math.abs(currentLimit - nextLimit) < 0.01 ? currentLimit : nextLimit
     ))
@@ -1427,7 +1478,11 @@ function MapEditor() {
     updateMapZoomLimit()
     const observer = new ResizeObserver(updateMapZoomLimit)
     observer.observe(image)
-    return () => observer.disconnect()
+    window.addEventListener('resize', updateMapZoomLimit)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateMapZoomLimit)
+    }
   }, [selectedFloorId, selectedFloor?.mapImage])
 
   function handleMapZoomButton(delta) {
@@ -2830,9 +2885,18 @@ function MapEditor() {
                             type="button"
                           >
                             <span className={node.type === 'room' ? 'room-marker-square' : node.type === 'stair' ? 'stair-marker-diamond' : 'navigation-dot'} />
-                            <span className={`navigation-marker-label${node.type === 'stair' ? ' stair-marker-label' : ''}`}>
-                              {node.type === 'stair' ? `P${node.stairPart}` : node.name}
-                            </span>
+                            {node.type === 'room' && node._id === selectedNodeId && (
+                              <span className={`navigation-marker-label map-room-label is-${selectedRoomLabelPosition(node, nodes, cabins)}`}>
+                                {node.name}
+                              </span>
+                            )}
+                            {['nav', 'stair', 'buildingConnection'].includes(node.type) && node._id === selectedNodeId && (
+                              <span className="navigation-marker-label selected-node-label">
+                                {node.type === 'stair'
+                                  ? `P${node.stairPart} · ${node.name}`
+                                  : node.name}
+                              </span>
+                            )}
                           </button>
                         ))}
                         {cabins.map((cabin) => (

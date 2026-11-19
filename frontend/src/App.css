@@ -896,7 +896,6 @@ body.panel-resizing * {
   max-height: 100%;
   line-height: 0;
   transform-origin: center center;
-  will-change: transform;
   user-select: none;
 }
 
@@ -941,6 +940,43 @@ body.panel-resizing * {
   stroke-width: 0.8;
 }
 
+.map-room-label {
+  width: 112px;
+  max-width: 112px;
+  padding: 2px 4px;
+  overflow-wrap: anywhere;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 88%);
+  color: #713c8f;
+}
+
+.map-room-label.is-above {
+  top: auto;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.map-room-label.is-right {
+  top: 50%;
+  left: 16px;
+  transform: translateY(-50%);
+}
+
+.map-room-label.is-left {
+  top: 50%;
+  right: 16px;
+  left: auto;
+  transform: translateY(-50%);
+}
+
+.map-room-label.is-below {
+  top: calc(100% + 10px);
+  bottom: auto;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 .floor-map {
   display: block;
   width: auto;
@@ -976,6 +1012,12 @@ body.panel-resizing * {
 .map-node-marker.is-selected {
   outline: 2px solid #176b87;
   outline-offset: 2px;
+  z-index: 6;
+}
+
+.map-node-marker > span:first-child {
+  position: relative;
+  z-index: 1;
 }
 
 .map-node-marker.is-connection-selected {
@@ -1051,8 +1093,9 @@ body.panel-resizing * {
 
 .navigation-marker-label {
   position: absolute;
+  z-index: 10;
   top: 50%;
-  left: 12px;
+  left: 16px;
   color: #17324d;
   font-size: 10px;
   font-weight: 700;
@@ -1060,6 +1103,16 @@ body.panel-resizing * {
   pointer-events: none;
   text-shadow: 0 0 2px #ffffff, 0 0 3px #ffffff;
   transform: translateY(-50%);
+}
+
+.selected-node-label {
+  display: block;
+  width: max-content;
+  max-width: none;
+  overflow: visible;
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: nowrap;
 }
 
 .cabin-marker-pin {
