@@ -117,6 +117,7 @@ function UserPage() {
   const [isMobileNavigationPanelExpanded, setIsMobileNavigationPanelExpanded] = useState(false)
   const mapImageStatesRef = useRef(mapImageStates)
   const [isMapPanning, setIsMapPanning] = useState(false)
+  const mapViewRef = useRef(mapView)
   const mapStageRef = useRef(null)
   const mapImageRef = useRef(null)
   const mapPanRef = useRef(null)
@@ -124,6 +125,7 @@ function UserPage() {
   const mapGestureRef = useRef(null)
   const mapPanFrameRef = useRef(null)
   const pendingMapPanRef = useRef(null)
+  const routeFrameAnimationRef = useRef(null)
   const routeFrameRequestIdRef = useRef(0)
   const mapWheelHandlerRef = useRef(null)
   const navigate = useNavigate()
@@ -416,19 +418,84 @@ function UserPage() {
     }
   }, [contextFloors, selectedDisplayFloorId, enqueueOriginal, updateMapImageState])
 
-  function resetMapView() {
-    setMapView({ zoom: 1, panX: 0, panY: 0 })
-  }
+  const updateMapView = useCallback((nextView) => {
+    const updatedView = typeof nextView === 'function'
+      ? nextView(mapViewRef.current)
+      : nextView
+    mapViewRef.current = updatedView
+    setMapView(updatedView)
+  }, [])
 
-  function requestMobileRouteFrame(floorId, nodes) {
+  const cancelRouteFrameAnimation = useCallback(() => {
+    const animation = routeFrameAnimationRef.current
+    if (!animation) {
+      return null
+    }
+    if (animation.frameId !== null) {
+      cancelAnimationFrame(animation.frameId)
+    }
+    routeFrameAnimationRef.current = null
+    updateMapView(animation.currentView)
+    return animation.currentView
+  }, [updateMapView])
+
+  const resetMapView = useCallback(() => {
+    cancelRouteFrameAnimation()
+    updateMapView({ zoom: 1, panX: 0, panY: 0 })
+  }, [cancelRouteFrameAnimation, updateMapView])
+
+  const animateMapViewTo = useCallback((targetView) => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      updateMapView(targetView)
+      return
+    }
+
+    const startView = mapViewRef.current
+    const duration = 700
+    let startTime = null
+    const animation = { frameId: null, currentView: startView }
+    routeFrameAnimationRef.current = animation
+
+    function animateFrame(timestamp) {
+      if (routeFrameAnimationRef.current !== animation) {
+        return
+      }
+
+      if (startTime === null) {
+        startTime = timestamp
+      }
+      const progress = Math.min((timestamp - startTime) / duration, 1)
+      const easedProgress = 0.5 - Math.cos(Math.PI * progress) / 2
+      const currentView = {
+        zoom: startView.zoom + (targetView.zoom - startView.zoom) * easedProgress,
+        panX: startView.panX + (targetView.panX - startView.panX) * easedProgress,
+        panY: startView.panY + (targetView.panY - startView.panY) * easedProgress,
+      }
+      animation.currentView = currentView
+      updateMapView(currentView)
+
+      if (progress < 1) {
+        animation.frameId = requestAnimationFrame(animateFrame)
+      } else {
+        routeFrameAnimationRef.current = null
+        updateMapView(targetView)
+      }
+    }
+
+    animation.frameId = requestAnimationFrame(animateFrame)
+  }, [updateMapView])
+
+  function requestMobileRouteFrame(floorId, nodes, animate = false) {
     if (!window.matchMedia('(max-width: 700px)').matches) {
       return
     }
+    cancelRouteFrameAnimation()
     routeFrameRequestIdRef.current += 1
     setRouteFrameRequest({
       id: routeFrameRequestIdRef.current,
       floorId: String(floorId),
       nodes,
+      animate,
     })
   }
 
@@ -451,7 +518,7 @@ function UserPage() {
     setSelectedDisplayFloorId(floorId)
   }
 
-  function updateMapZoomLimit() {
+  const updateMapZoomLimit = useCallback(() => {
     const image = mapImageRef.current
     if (!image || !image.complete || !image.naturalWidth || !image.clientWidth) {
       return
@@ -460,10 +527,10 @@ function UserPage() {
     setMaxMapZoom((currentLimit) => (
       Math.abs(currentLimit - nextLimit) < 0.01 ? currentLimit : nextLimit
     ))
-    setMapView((current) => current.zoom > nextLimit
+    updateMapView((current) => current.zoom > nextLimit
       ? { ...current, zoom: nextLimit }
       : current)
-  }
+  }, [updateMapView])
 
   function handleMapImageLoad() {
     setLoadedMapImageUrl(displayMapImageUrl)
@@ -487,12 +554,16 @@ function UserPage() {
     const observer = new ResizeObserver(updateMapZoomLimit)
     observer.observe(image)
     return () => observer.disconnect()
-  }, [selectedDisplayFloorId, selectedDisplayFloor?.mapImage])
+  }, [selectedDisplayFloorId, selectedDisplayFloor?.mapImage, updateMapZoomLimit])
 
   useEffect(() => () => {
     if (mapPanFrameRef.current !== null) {
       cancelAnimationFrame(mapPanFrameRef.current)
     }
+    if (routeFrameAnimationRef.current && routeFrameAnimationRef.current.frameId !== null) {
+      cancelAnimationFrame(routeFrameAnimationRef.current.frameId)
+    }
+    routeFrameAnimationRef.current = null
     mapPanRef.current = null
     mapPointersRef.current.clear()
     mapGestureRef.current = null
@@ -506,7 +577,7 @@ function UserPage() {
     const bounds = stage.getBoundingClientRect()
     const centerX = bounds.left + bounds.width / 2
     const centerY = bounds.top + bounds.height / 2
-    setMapView((current) => {
+    updateMapView((current) => {
       const scale = zoom / current.zoom
       return {
         zoom,
@@ -519,9 +590,10 @@ function UserPage() {
   function handleMapZoomButton(delta) {
     const stage = mapStageRef.current
     if (!stage) return
+    const currentView = cancelRouteFrameAnimation() || mapView
     const bounds = stage.getBoundingClientRect()
     zoomMapAtPoint(
-      mapView.zoom + delta,
+      currentView.zoom + delta,
       bounds.left + bounds.width / 2,
       bounds.top + bounds.height / 2,
     )
@@ -532,8 +604,9 @@ function UserPage() {
     if (event.target.closest('button, input, select, textarea, .user-room-route-marker, .user-cabin-marker')) {
       return
     }
+    const currentView = cancelRouteFrameAnimation() || mapView
     zoomMapAtPoint(
-      mapView.zoom + (event.deltaY < 0 ? MAP_ZOOM_STEP : -MAP_ZOOM_STEP),
+      currentView.zoom + (event.deltaY < 0 ? MAP_ZOOM_STEP : -MAP_ZOOM_STEP),
       event.clientX,
       event.clientY,
     )
@@ -674,13 +747,17 @@ function UserPage() {
         const pendingView = pendingMapPanRef.current
         pendingMapPanRef.current = null
         if (pendingView) {
-          setMapView(pendingView)
+          updateMapView(pendingView)
         }
       })
     }
   }
 
   function getCurrentMapView() {
+    const animatedView = cancelRouteFrameAnimation()
+    if (animatedView) {
+      return animatedView
+    }
     if (mapPanFrameRef.current !== null) {
       cancelAnimationFrame(mapPanFrameRef.current)
       mapPanFrameRef.current = null
@@ -688,10 +765,10 @@ function UserPage() {
     const pendingView = pendingMapPanRef.current
     pendingMapPanRef.current = null
     if (pendingView) {
-      setMapView(pendingView)
+      updateMapView(pendingView)
       return pendingView
     }
-    return mapGestureRef.current?.lastView || mapPanRef.current?.lastView || mapView
+    return mapGestureRef.current?.lastView || mapPanRef.current?.lastView || mapViewRef.current
   }
 
   function startMapPinch(pointerIds, startView) {
@@ -795,13 +872,16 @@ function UserPage() {
     }]
   })
 
-  function clearRoute() {
+  function clearRoute(preserveDisplayedFloor = false) {
+    cancelRouteFrameAnimation()
     setRoute(null)
     setRouteFrameRequest(null)
     setMessage('')
     setError('')
     setActiveRouteSegmentIndex(0)
-    setDisplayFloor(contextFloors[0] ? String(contextFloors[0]._id) : '')
+    if (!preserveDisplayedFloor) {
+      setDisplayFloor(contextFloors[0] ? String(contextFloors[0]._id) : '')
+    }
   }
 
   function selectContext(contextId) {
@@ -827,7 +907,7 @@ function UserPage() {
 
   async function handleNavigate(event) {
     event.preventDefault()
-    clearRoute()
+    clearRoute(window.matchMedia('(max-width: 700px)').matches)
 
     if (!startNodeId || !endNodeId) {
       setMessage('Select a starting point and a destination.')
@@ -868,7 +948,10 @@ function UserPage() {
           ? 'campus'
           : String(firstFloor.buildingId?._id || firstFloor.buildingId))
         setDisplayFloor(firstFloorId)
-        requestMobileRouteFrame(firstFloorId, decoratedResult.path)
+        const sameFloorRoute = decoratedResult.path.every(
+          (node) => getNodeFloorId(node) === firstFloorId,
+        )
+        requestMobileRouteFrame(firstFloorId, decoratedResult.path, sameFloorRoute)
       }
     } catch (routeError) {
       setError(routeError.message)
@@ -1169,11 +1252,16 @@ function UserPage() {
       const canvasLeft = canvas.offsetLeft
       const canvasTop = canvas.offsetTop
 
-      setMapView({
+      const targetView = {
         zoom,
         panX: targetX - canvasLeft - originX - (routeCenterX - originX) * zoom,
         panY: targetY - canvasTop - originY - (routeCenterY - originY) * zoom,
-      })
+      }
+      if (routeFrameRequest.animate) {
+        animateMapViewTo(targetView)
+      } else {
+        updateMapView(targetView)
+      }
       setRouteFrameRequest(null)
     })
     return () => cancelAnimationFrame(frameId)
@@ -1183,6 +1271,9 @@ function UserPage() {
     errorMapImageUrl,
     mapIsReady,
     maxMapZoom,
+    animateMapViewTo,
+    resetMapView,
+    updateMapView,
     routeFrameRequest,
     selectedDisplayFloor?.mapImage,
   ])
