@@ -98,7 +98,7 @@ function UserPage() {
   const [cabins, setCabins] = useState([])
   const [floors, setFloors] = useState([])
   const [buildings, setBuildings] = useState([])
-  const [selectedContextId, setSelectedContextId] = useState('')
+  const [selectedContextId, setSelectedContextId] = useState('campus')
   const [selectedDisplayFloorId, setSelectedDisplayFloorId] = useState('')
   const [startNodeId, setStartNodeId] = useState('')
   const [endNodeId, setEndNodeId] = useState('')
@@ -119,6 +119,8 @@ function UserPage() {
   const mapStageRef = useRef(null)
   const mapImageRef = useRef(null)
   const mapPanRef = useRef(null)
+  const mapPointersRef = useRef(new Map())
+  const mapGestureRef = useRef(null)
   const mapPanFrameRef = useRef(null)
   const pendingMapPanRef = useRef(null)
   const mapWheelHandlerRef = useRef(null)
@@ -428,6 +430,8 @@ function UserPage() {
     resetMapView()
     setMaxMapZoom(1)
     mapPanRef.current = null
+    mapPointersRef.current.clear()
+    mapGestureRef.current = null
     pendingMapPanRef.current = null
     setIsMapPanning(false)
     setSelectedDisplayFloorId(floorId)
@@ -476,6 +480,8 @@ function UserPage() {
       cancelAnimationFrame(mapPanFrameRef.current)
     }
     mapPanRef.current = null
+    mapPointersRef.current.clear()
+    mapGestureRef.current = null
     pendingMapPanRef.current = null
   }, [])
 
@@ -539,56 +545,157 @@ function UserPage() {
     if (event.target.closest('button, input, select, textarea, .user-room-route-marker, .user-cabin-marker')) {
       return
     }
-    event.preventDefault()
-    mapPanRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      panX: mapView.panX,
-      panY: mapView.panY,
+    if (event.pointerType === 'mouse' && event.button !== 0) {
+      return
     }
-    pendingMapPanRef.current = { panX: mapView.panX, panY: mapView.panY }
+    event.preventDefault()
+    const pointers = mapPointersRef.current
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
     setIsMapPanning(true)
     try {
       event.currentTarget.setPointerCapture(event.pointerId)
     } catch {
       // Pointer capture may be unavailable for synthetic or unsupported pointer events.
     }
+    if (pointers.size >= 2) {
+      if (mapGestureRef.current?.mode !== 'pinch') {
+        startMapPinch([...pointers.keys()].slice(0, 2), getCurrentMapView())
+      }
+      mapPanRef.current = null
+      return
+    }
+    const currentView = getCurrentMapView()
+    mapGestureRef.current = null
+    mapPanRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      panX: currentView.panX,
+      panY: currentView.panY,
+      zoom: currentView.zoom,
+      lastView: currentView,
+    }
   }
 
   function handleMapPointerMove(event) {
+    const pointers = mapPointersRef.current
+    if (!pointers.has(event.pointerId)) return
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+
+    const gesture = mapGestureRef.current
+    if (gesture?.mode === 'pinch' && gesture.pointerIds.every((pointerId) => pointers.has(pointerId))) {
+      const [first, second] = gesture.pointerIds.map((pointerId) => pointers.get(pointerId))
+      const distance = Math.hypot(second.x - first.x, second.y - first.y)
+      const midpoint = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 }
+      const stage = mapStageRef.current
+      if (!stage || gesture.startDistance === 0) return
+      const bounds = stage.getBoundingClientRect()
+      const centerX = bounds.left + bounds.width / 2
+      const centerY = bounds.top + bounds.height / 2
+      const zoom = clampMapZoom(
+        gesture.startZoom * distance / gesture.startDistance,
+        maxMapZoom,
+      )
+      const scale = zoom / gesture.startZoom
+      const nextView = {
+        zoom,
+        panX: midpoint.x - centerX -
+          (gesture.startMidpoint.x - centerX - gesture.startPanX) * scale,
+        panY: midpoint.y - centerY -
+          (gesture.startMidpoint.y - centerY - gesture.startPanY) * scale,
+      }
+      gesture.lastView = nextView
+      queueMapView(nextView)
+      return
+    }
+
     const pan = mapPanRef.current
     if (!pan || pan.pointerId !== event.pointerId) return
     const deltaX = event.clientX - pan.startX
     const deltaY = event.clientY - pan.startY
-    pendingMapPanRef.current = { panX: pan.panX + deltaX, panY: pan.panY + deltaY }
-    if (mapPanFrameRef.current === null) {
-      mapPanFrameRef.current = requestAnimationFrame(() => {
-        mapPanFrameRef.current = null
-        if (pendingMapPanRef.current) {
-          setMapView((current) => ({ ...current, ...pendingMapPanRef.current }))
-        }
-      })
+    const nextView = {
+      zoom: pan.zoom,
+      panX: pan.panX + deltaX,
+      panY: pan.panY + deltaY,
     }
+    pan.lastView = nextView
+    queueMapView(nextView)
   }
 
   function handleMapPointerEnd(event) {
-    if (!mapPanRef.current || mapPanRef.current.pointerId !== event.pointerId) return
-    if (mapPanFrameRef.current !== null) {
-      cancelAnimationFrame(mapPanFrameRef.current)
-      mapPanFrameRef.current = null
-    }
-    if (pendingMapPanRef.current) {
-      setMapView((current) => ({ ...current, ...pendingMapPanRef.current }))
-    }
+    const pointers = mapPointersRef.current
+    if (!pointers.has(event.pointerId)) return
+    pointers.delete(event.pointerId)
     try {
       event.currentTarget.releasePointerCapture(event.pointerId)
     } catch {
       // The pointer may already have been released by the browser.
     }
+    const currentView = getCurrentMapView()
+    const remainingPointers = [...pointers.entries()]
     mapPanRef.current = null
+    mapGestureRef.current = null
+    if (remainingPointers.length >= 2) {
+      startMapPinch(remainingPointers.slice(0, 2).map(([pointerId]) => pointerId), currentView)
+    } else if (remainingPointers.length === 1) {
+      const [pointerId, point] = remainingPointers[0]
+      mapPanRef.current = {
+        pointerId,
+        startX: point.x,
+        startY: point.y,
+        panX: currentView.panX,
+        panY: currentView.panY,
+        zoom: currentView.zoom,
+        lastView: currentView,
+      }
+    }
+    setIsMapPanning(remainingPointers.length > 0)
+  }
+
+  function queueMapView(nextView) {
+    pendingMapPanRef.current = nextView
+    if (mapPanFrameRef.current === null) {
+      mapPanFrameRef.current = requestAnimationFrame(() => {
+        mapPanFrameRef.current = null
+        const pendingView = pendingMapPanRef.current
+        pendingMapPanRef.current = null
+        if (pendingView) {
+          setMapView(pendingView)
+        }
+      })
+    }
+  }
+
+  function getCurrentMapView() {
+    if (mapPanFrameRef.current !== null) {
+      cancelAnimationFrame(mapPanFrameRef.current)
+      mapPanFrameRef.current = null
+    }
+    const pendingView = pendingMapPanRef.current
     pendingMapPanRef.current = null
-    setIsMapPanning(false)
+    if (pendingView) {
+      setMapView(pendingView)
+      return pendingView
+    }
+    return mapGestureRef.current?.lastView || mapPanRef.current?.lastView || mapView
+  }
+
+  function startMapPinch(pointerIds, startView) {
+    const points = pointerIds.map((pointerId) => mapPointersRef.current.get(pointerId))
+    if (points.length !== 2 || points.some((point) => !point)) return
+    mapGestureRef.current = {
+      mode: 'pinch',
+      pointerIds,
+      startDistance: Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y),
+      startMidpoint: {
+        x: (points[0].x + points[1].x) / 2,
+        y: (points[0].y + points[1].y) / 2,
+      },
+      startZoom: startView.zoom,
+      startPanX: startView.panX,
+      startPanY: startView.panY,
+      lastView: startView,
+    }
   }
 
   function getNodeFloorId(node) {

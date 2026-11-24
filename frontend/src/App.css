@@ -3476,41 +3476,57 @@ body.panel-resizing * {
 }
 
 @media (max-width: 700px) {
+  html:has(.user-navigation-page),
+  body:has(.user-navigation-page),
+  #root:has(.user-navigation-page) {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
   .user-navigation-page {
-    position: relative;
+    position: fixed;
+    inset: 0;
     display: block;
+    width: 100%;
     height: 100vh;
     height: 100dvh;
     min-height: 0;
+    overflow: hidden;
   }
 
   .user-navigation-header {
     position: absolute;
     z-index: 20;
     inset: 0 0 auto;
-    display: block;
-    height: 0;
+    display: flex;
+    height: calc(44px + env(safe-area-inset-top));
     min-height: 0;
-    padding: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: calc(env(safe-area-inset-top) + 4px) 12px 4px;
     border: 0;
-    background: transparent;
-    backdrop-filter: none;
-    pointer-events: none;
+    background: rgb(6 12 29 / 78%);
+    backdrop-filter: blur(12px);
   }
 
-  .user-navigation-brand,
+  .user-navigation-brand {
+    display: flex;
+    gap: 8px;
+    font-size: 0.88rem;
+  }
+
+  .user-navigation-brand > div span,
   .user-navigation-status {
     display: none;
   }
 
   .user-logout-button {
-    position: absolute;
-    top: calc(env(safe-area-inset-top) + 8px);
-    right: 10px;
+    position: static;
     min-height: 34px;
     padding: 5px 10px;
     font-size: 0.7rem;
-    pointer-events: auto;
   }
 
   .user-navigation-content {
@@ -3564,7 +3580,7 @@ body.panel-resizing * {
     padding: 8px;
     border: 1px solid var(--user-border);
     border-radius: 14px;
-    background: rgb(8 17 38 / 86%);
+    background: rgb(8 17 38 / 76%);
     box-shadow: 0 8px 22px rgb(0 0 0 / 28%);
     backdrop-filter: blur(14px);
   }
@@ -3629,50 +3645,7 @@ body.panel-resizing * {
   }
 
   .user-context-panel {
-    position: relative;
-    flex: 0 0 auto;
-    padding: 0;
-    border: 0;
-    background: transparent;
-  }
-
-  .user-context-panel > .user-card-heading {
     display: none;
-  }
-
-  .user-context-list {
-    display: flex;
-    max-height: none;
-    gap: 5px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 0;
-    scrollbar-width: none;
-  }
-
-  .user-context-list::-webkit-scrollbar,
-  .user-floor-selector::-webkit-scrollbar {
-    display: none;
-  }
-
-  .user-context-button {
-    min-height: 40px;
-    flex: 0 0 auto;
-    padding: 6px 10px;
-    border-color: var(--user-border);
-    border-radius: 999px;
-    background: rgb(8 17 38 / 82%);
-    box-shadow: 0 4px 12px rgb(0 0 0 / 20%);
-    white-space: nowrap;
-    backdrop-filter: blur(10px);
-  }
-
-  .user-context-button small {
-    display: none;
-  }
-
-  .user-context-button.is-active {
-    box-shadow: 0 4px 12px rgb(0 0 0 / 20%);
   }
 
   .user-route-results {
@@ -3718,6 +3691,7 @@ body.panel-resizing * {
     z-index: 0;
     inset: 0;
     display: grid;
+    place-items: center;
     width: auto;
     height: auto;
     min-width: 0;
@@ -3727,44 +3701,26 @@ body.panel-resizing * {
     border: 0;
     border-radius: 0;
     container-type: size;
+    overscroll-behavior: contain;
   }
 
   .user-route-map-canvas {
-    max-width: 100cqw;
+    align-self: center;
+    justify-self: start;
+    max-width: none;
     max-height: 100cqh;
+    transform-origin: 50cqw 50cqh;
   }
 
   .user-route-map-image {
-    max-width: 100cqw;
-    max-height: 100cqh;
+    width: auto;
+    height: 100cqh;
+    max-width: none;
+    max-height: none;
   }
 
   .user-floor-selector {
-    position: absolute;
-    z-index: 6;
-    top: calc(env(safe-area-inset-top) + 232px);
-    right: 8px;
-    left: 8px;
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 5px;
-    margin: 0;
-    padding: 3px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    border: 1px solid rgb(121 153 221 / 20%);
-    border-radius: 10px;
-    background: rgb(8 17 38 / 82%);
-    scrollbar-width: none;
-    backdrop-filter: blur(12px);
-  }
-
-  .user-floor-button {
-    min-width: 54px;
-    min-height: 44px;
-    flex: 0 0 54px;
-    padding: 4px;
-    border-radius: 7px;
+    display: none;
   }
 
   .user-route-results > .user-empty-state {
@@ -3791,7 +3747,7 @@ body.panel-resizing * {
     overflow: hidden;
     border: 1px solid var(--user-border);
     border-radius: 16px;
-    background: rgb(12 21 45 / 94%);
+    background: rgb(12 21 45 / 84%);
     box-shadow: 0 12px 32px rgb(0 0 0 / 36%);
     backdrop-filter: blur(18px);
     transition: height 220ms ease;
@@ -3918,16 +3874,6 @@ body.panel-resizing * {
     font-size: 0.75rem;
   }
 
-  .user-map-view-controls {
-    position: absolute;
-    z-index: 8;
-    top: auto;
-    right: 10px;
-    bottom: calc(86px + env(safe-area-inset-bottom));
-    gap: 4px;
-    padding: 4px;
-  }
-
   .user-route-floor > .user-stair-transition {
     position: absolute;
     z-index: 8;
@@ -3936,33 +3882,15 @@ body.panel-resizing * {
     margin: 0;
   }
 
-  .user-route-results.has-route:not(.is-panel-expanded) .user-map-view-controls,
   .user-route-results.has-route:not(.is-panel-expanded) .user-route-floor > .user-stair-transition {
     bottom: calc(clamp(165px, 24dvh, 220px) + env(safe-area-inset-bottom) + 12px);
   }
 
-  .user-route-results.has-route.is-panel-expanded .user-map-view-controls,
   .user-route-results.has-route.is-panel-expanded .user-route-floor > .user-stair-transition {
     bottom: calc(clamp(280px, 48dvh, 420px) + env(safe-area-inset-bottom) + 12px);
   }
 
-  .user-map-view-controls button,
-  .user-map-view-controls span {
-    min-width: 44px;
-    height: 44px;
-    padding: 4px;
-    font-size: 0.78rem;
-  }
-
-  .user-map-view-controls span {
-    min-width: 48px;
-  }
-
-  .user-map-view-controls button:last-child {
-    min-width: 56px;
-  }
-
-  .user-route-guidance-actions {
-    background: linear-gradient(transparent, rgb(17 29 59 / 98%) 18%);
+  .user-map-view-controls {
+    display: none;
   }
 }
