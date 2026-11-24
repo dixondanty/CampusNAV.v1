@@ -113,6 +113,7 @@ function UserPage() {
   const [errorMapImageUrl, setErrorMapImageUrl] = useState('')
   const [loadedMapImageUrl, setLoadedMapImageUrl] = useState('')
   const [mapImageStates, setMapImageStates] = useState({})
+  const [isMobileNavigationPanelExpanded, setIsMobileNavigationPanelExpanded] = useState(false)
   const mapImageStatesRef = useRef(mapImageStates)
   const [isMapPanning, setIsMapPanning] = useState(false)
   const mapStageRef = useRef(null)
@@ -1015,34 +1016,53 @@ function UserPage() {
                 <span className="user-route-live"><i /> Route active</span>
               )}
             </div>
-            {route && (
-              <div className="user-route-summary">
-                <div className="user-summary-title">
-                  <span className="user-section-index">YOUR ROUTE</span>
-                  <strong>{routeFloorNames.length} {routeFloorNames.length === 1 ? 'floor' : 'floors'}</strong>
-                </div>
-                <div className="user-route-summary-details">
-                  <div><span>From</span><strong>{selectedLocation(selectedStartRoom, selectedStartEntrance, selectedStartCabin)}</strong></div>
-                  <div><span>To</span><strong>{selectedLocation(selectedEndRoom, selectedEndEntrance, selectedEndCabin)}</strong></div>
-                  <div><span>Distance</span><strong>{Number(route.distance).toFixed(2)} units</strong></div>
-                  <div><span>Floors along your route</span><strong>{routeFloorNames.map((floor) => floor.name).join(' → ')}</strong></div>
-                </div>
-                {missingFloorInRoute && <p className="user-navigation-message">A floor in this route is no longer available. Some maps may be missing.</p>}
+            <section
+              aria-label="Route information"
+              className={`user-mobile-navigation-panel${route ? ' has-route' : ''}${isMobileNavigationPanelExpanded ? ' is-expanded' : ''}`}
+            >
+              <button
+                aria-controls="user-mobile-navigation-details"
+                aria-expanded={isMobileNavigationPanelExpanded}
+                className="user-mobile-navigation-toggle"
+                onClick={() => setIsMobileNavigationPanelExpanded((expanded) => !expanded)}
+                type="button"
+              >
+                <span>{route ? 'Route information' : 'Navigation information'}</span>
+                <span>{isMobileNavigationPanelExpanded ? 'Show less' : 'Show more'}</span>
+                <span aria-hidden="true">{isMobileNavigationPanelExpanded ? '−' : '+'}</span>
+              </button>
+              <div className="user-mobile-navigation-content" id="user-mobile-navigation-details">
+                {route && (
+                  <div className="user-route-summary">
+                    <div className="user-summary-title">
+                      <span className="user-section-index">YOUR ROUTE</span>
+                      <strong>{routeFloorNames.length} {routeFloorNames.length === 1 ? 'floor' : 'floors'}</strong>
+                    </div>
+                    <div className="user-route-summary-details">
+                      <div><span>From</span><strong>{selectedLocation(selectedStartRoom, selectedStartEntrance, selectedStartCabin)}</strong></div>
+                      <div><span>To</span><strong>{selectedLocation(selectedEndRoom, selectedEndEntrance, selectedEndCabin)}</strong></div>
+                      <div><span>Distance</span><strong>{Number(route.distance).toFixed(2)} units</strong></div>
+                      <div><span>Floors along your route</span><strong>{routeFloorNames.map((floor) => floor.name).join(' → ')}</strong></div>
+                    </div>
+                    {missingFloorInRoute && <p className="user-navigation-message">A floor in this route is no longer available. Some maps may be missing.</p>}
+                  </div>
+                )}
+                {route && routeGuidanceSegments.length > 1 && (
+                  <section aria-label="Route map guide" className="user-route-guidance">
+                    <div className="user-route-guidance-step">
+                      <span className="user-route-guidance-indicator">Current floor: {getFloorMapLabel(activeRouteGuidanceFloorId) || 'Unavailable floor'}</span>
+                      {routeGuidanceMatchesDisplay && isDestinationDisplayFloor && <span className="user-route-guidance-arrival">Your destination is on this floor.</span>}
+                    </div>
+                    {routeGuidanceCue && <p className="user-stair-transition">{routeGuidanceCue}</p>}
+                    <div className="user-route-guidance-actions">
+                      <button className="user-guidance-back-button" disabled={activeRouteSegmentIndex === 0} onClick={() => goToRouteSegment(activeRouteSegmentIndex - 1)} type="button">Back</button>
+                      <button className="user-guidance-next-button" disabled={activeRouteSegmentIndex === routeGuidanceSegments.length - 1} onClick={() => goToRouteSegment(activeRouteSegmentIndex + 1)} type="button">Next</button>
+                    </div>
+                  </section>
+                )}
+                {!route && <p className="user-mobile-navigation-hint">Choose a starting point and destination to begin.</p>}
               </div>
-            )}
-            {route && routeGuidanceSegments.length > 1 && (
-              <section aria-label="Route map guide" className="user-route-guidance">
-                <div className="user-route-guidance-step">
-                  <span className="user-route-guidance-indicator">Current floor: {getFloorMapLabel(activeRouteGuidanceFloorId) || 'Unavailable floor'}</span>
-                  {routeGuidanceMatchesDisplay && isDestinationDisplayFloor && <span className="user-route-guidance-arrival">Your destination is on this floor.</span>}
-                </div>
-                {routeGuidanceCue && <p className="user-stair-transition">{routeGuidanceCue}</p>}
-                <div className="user-route-guidance-actions">
-                  <button className="user-guidance-back-button" disabled={activeRouteSegmentIndex === 0} onClick={() => goToRouteSegment(activeRouteSegmentIndex - 1)} type="button">Back</button>
-                  <button className="user-guidance-next-button" disabled={activeRouteSegmentIndex === routeGuidanceSegments.length - 1} onClick={() => goToRouteSegment(activeRouteSegmentIndex + 1)} type="button">Next</button>
-                </div>
-              </section>
-            )}
+            </section>
             {contextFloors.length === 0 && !loading && (
               <div className="user-empty-state"><span>⌁</span><strong>No floor maps in this context</strong><p>Select another map context or ask an administrator to add a floor map.</p></div>
             )}
