@@ -110,6 +110,7 @@ function UserPage() {
   const [navigating, setNavigating] = useState(false)
   const [mapView, setMapView] = useState({ zoom: 1, panX: 0, panY: 0 })
   const [maxMapZoom, setMaxMapZoom] = useState(1)
+  const [routeFrameRequest, setRouteFrameRequest] = useState(null)
   const [errorMapImageUrl, setErrorMapImageUrl] = useState('')
   const [loadedMapImageUrl, setLoadedMapImageUrl] = useState('')
   const [mapImageStates, setMapImageStates] = useState({})
@@ -123,6 +124,7 @@ function UserPage() {
   const mapGestureRef = useRef(null)
   const mapPanFrameRef = useRef(null)
   const pendingMapPanRef = useRef(null)
+  const routeFrameRequestIdRef = useRef(0)
   const mapWheelHandlerRef = useRef(null)
   const navigate = useNavigate()
 
@@ -416,6 +418,18 @@ function UserPage() {
 
   function resetMapView() {
     setMapView({ zoom: 1, panX: 0, panY: 0 })
+  }
+
+  function requestMobileRouteFrame(floorId, nodes) {
+    if (!window.matchMedia('(max-width: 700px)').matches) {
+      return
+    }
+    routeFrameRequestIdRef.current += 1
+    setRouteFrameRequest({
+      id: routeFrameRequestIdRef.current,
+      floorId: String(floorId),
+      nodes,
+    })
   }
 
   function setDisplayFloor(floorId) {
@@ -783,6 +797,7 @@ function UserPage() {
 
   function clearRoute() {
     setRoute(null)
+    setRouteFrameRequest(null)
     setMessage('')
     setError('')
     setActiveRouteSegmentIndex(0)
@@ -853,6 +868,7 @@ function UserPage() {
           ? 'campus'
           : String(firstFloor.buildingId?._id || firstFloor.buildingId))
         setDisplayFloor(firstFloorId)
+        requestMobileRouteFrame(firstFloorId, decoratedResult.path)
       }
     } catch (routeError) {
       setError(routeError.message)
@@ -874,6 +890,7 @@ function UserPage() {
         : String(floor.buildingId?._id || floor.buildingId))
       setActiveRouteSegmentIndex(index)
       setDisplayFloor(floorId)
+      requestMobileRouteFrame(floorId, segment.nodes)
       setMessage('')
     } else {
       setMessage('A floor in this route is no longer available. Refresh the route or restore the missing floor.')
@@ -968,6 +985,207 @@ function UserPage() {
     }
     return transitions.find((transition) => transition.afterFloorId === activeRouteGuidanceFloorId)?.message || ''
   })()
+
+  useEffect(() => {
+    if (!routeFrameRequest || routeFrameRequest.floorId !== displayFloorId) {
+      return undefined
+    }
+
+    const frameId = requestAnimationFrame(() => {
+      if (!window.matchMedia('(max-width: 700px)').matches) {
+        setRouteFrameRequest(null)
+        return
+      }
+      if (
+        !selectedDisplayFloor?.mapImage ||
+        errorMapImageUrl === displayMapImageUrl
+      ) {
+        resetMapView()
+        setRouteFrameRequest(null)
+        return
+      }
+      if (!mapIsReady) {
+        return
+      }
+
+      const stage = mapStageRef.current
+      const canvas = stage?.querySelector('.user-route-map-canvas')
+      const image = mapImageRef.current
+      if (!stage || !canvas || !image?.complete || !image.naturalWidth) {
+        setRouteFrameRequest(null)
+        return
+      }
+
+      const canvasWidth = canvas.clientWidth
+      const canvasHeight = canvas.clientHeight
+      if (!canvasWidth || !canvasHeight) {
+        resetMapView()
+        setRouteFrameRequest(null)
+        return
+      }
+
+      let minX = Number.POSITIVE_INFINITY
+      let minY = Number.POSITIVE_INFINITY
+      let maxX = Number.NEGATIVE_INFINITY
+      let maxY = Number.NEGATIVE_INFINITY
+      const includeBounds = (left, top, right, bottom) => {
+        minX = Math.min(minX, left)
+        minY = Math.min(minY, top)
+        maxX = Math.max(maxX, right)
+        maxY = Math.max(maxY, bottom)
+      }
+
+      const geometryNodes = routeFrameRequest.nodes.slice(0, -1).flatMap((node, index) => {
+        const nextNode = routeFrameRequest.nodes[index + 1]
+        if (
+          getNodeFloorId(node) !== routeFrameRequest.floorId ||
+          getNodeFloorId(nextNode) !== routeFrameRequest.floorId
+        ) {
+          return []
+        }
+        return [node, nextNode]
+      })
+
+      geometryNodes.forEach((node) => {
+        if (
+          getNodeFloorId(node) !== routeFrameRequest.floorId ||
+          node.x === null ||
+          node.x === undefined ||
+          node.y === null ||
+          node.y === undefined
+        ) {
+          return
+        }
+        const x = Number(node.x)
+        const y = Number(node.y)
+        if (
+          !Number.isFinite(x) ||
+          !Number.isFinite(y) ||
+          x < 0 ||
+          x > 100 ||
+          y < 0 ||
+          y > 100
+        ) {
+          return
+        }
+        const mapX = x * canvasWidth / 100
+        const mapY = y * canvasHeight / 100
+        includeBounds(mapX, mapY, mapX, mapY)
+      })
+
+      canvas.querySelectorAll('.user-room-route-marker, .user-cabin-marker').forEach((marker) => {
+        const x = Number.parseFloat(marker.style.left)
+        const y = Number.parseFloat(marker.style.top)
+        if (
+          !Number.isFinite(x) ||
+          !Number.isFinite(y) ||
+          x < 0 ||
+          x > 100 ||
+          y < 0 ||
+          y > 100
+        ) {
+          return
+        }
+        const markerX = x * canvasWidth / 100
+        const markerY = y * canvasHeight / 100
+        const label = marker.querySelector('.user-room-route-marker-label, .user-cabin-marker-label')
+        const markerWidth = label?.offsetWidth || marker.offsetWidth
+        const markerHeight = marker.offsetHeight
+        const labelHeight = label?.offsetHeight || 0
+        includeBounds(
+          markerX - markerWidth / 2,
+          markerY - labelHeight - markerHeight / 2,
+          markerX + markerWidth / 2,
+          markerY + markerHeight / 2,
+        )
+      })
+
+      if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
+        resetMapView()
+        setRouteFrameRequest(null)
+        return
+      }
+
+      const linePadding = 10
+      minX -= linePadding
+      minY -= linePadding
+      maxX += linePadding
+      maxY += linePadding
+
+      const stageBounds = stage.getBoundingClientRect()
+      const topControlsBounds = document.querySelector('.user-mobile-top-controls')?.getBoundingClientRect()
+      const headerBounds = document.querySelector('.user-navigation-header')?.getBoundingClientRect()
+      const panel = document.querySelector('.user-mobile-navigation-panel')
+      const panelBounds = panel?.getBoundingClientRect()
+      const maxPanelHeight = panel
+        ? Number.parseFloat(getComputedStyle(panel).maxHeight)
+        : Number.NaN
+      const expandedPanelHeight = Math.min(
+        Math.max(280, Math.min(420, stageBounds.height * 0.48)),
+        Number.isFinite(maxPanelHeight) ? maxPanelHeight : stageBounds.height,
+      )
+      const expandedPanelTop = panelBounds
+        ? panelBounds.bottom - expandedPanelHeight
+        : stageBounds.bottom
+      const edgePadding = 22
+      const usableLeft = stageBounds.left + edgePadding
+      const usableRight = stageBounds.right - edgePadding
+      const usableTop = Math.max(
+        stageBounds.top + edgePadding,
+        (headerBounds?.bottom || stageBounds.top) + edgePadding,
+        (topControlsBounds?.bottom || stageBounds.top) + edgePadding,
+      )
+      const usableBottom = Math.min(
+        stageBounds.bottom - edgePadding,
+        (panelBounds ? Math.min(panelBounds.top, expandedPanelTop) : stageBounds.bottom) - edgePadding,
+      )
+      const availableWidth = usableRight - usableLeft
+      const availableHeight = usableBottom - usableTop
+      const routeWidth = maxX - minX
+      const routeHeight = maxY - minY
+      if (
+        availableWidth <= 0 ||
+        availableHeight <= 0 ||
+        routeWidth <= 0 ||
+        routeHeight <= 0
+      ) {
+        resetMapView()
+        setRouteFrameRequest(null)
+        return
+      }
+
+      const zoom = clampMapZoom(
+        Math.min(availableWidth / routeWidth, availableHeight / routeHeight),
+        maxMapZoom,
+      )
+      const routeCenterX = (minX + maxX) / 2
+      const routeCenterY = (minY + maxY) / 2
+      const [originX, originY] = getComputedStyle(canvas)
+        .transformOrigin
+        .split(' ')
+        .map((value) => Number.parseFloat(value))
+      const targetX = (usableLeft + usableRight) / 2 - stageBounds.left
+      const targetY = (usableTop + usableBottom) / 2 - stageBounds.top
+      const canvasLeft = canvas.offsetLeft
+      const canvasTop = canvas.offsetTop
+
+      setMapView({
+        zoom,
+        panX: targetX - canvasLeft - originX - (routeCenterX - originX) * zoom,
+        panY: targetY - canvasTop - originY - (routeCenterY - originY) * zoom,
+      })
+      setRouteFrameRequest(null)
+    })
+    return () => cancelAnimationFrame(frameId)
+  }, [
+    displayFloorId,
+    displayMapImageUrl,
+    errorMapImageUrl,
+    mapIsReady,
+    maxMapZoom,
+    routeFrameRequest,
+    selectedDisplayFloor?.mapImage,
+  ])
 
   return (
     <main className="user-navigation-page">
