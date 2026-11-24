@@ -896,117 +896,122 @@ function UserPage() {
 
         <div className="user-navigation-layout">
           <aside className="user-route-sidebar">
-            <section aria-label="Choose route" className="user-navigation-card">
-              <div className="user-card-heading">
-                <div>
-                  <span className="user-section-index">ROUTE PLANNER</span>
-                  <h2>Set your course</h2>
+            <div className="user-mobile-top-controls">
+              <section aria-label="Choose route" className="user-navigation-card">
+                <div className="user-card-heading">
+                  <div>
+                    <span className="user-section-index">ROUTE PLANNER</span>
+                    <h2>Set your course</h2>
+                  </div>
                 </div>
-              </div>
-              <form onSubmit={handleNavigate}>
-                <label className="user-navigation-field">
-                  <span>From</span>
-                  <SearchableLocationSelect
-                    ariaLabel="Search starting point"
-                    excludedValue={endNodeId}
-                    groups={destinationGroups}
-                    onChange={(nodeId) => {
-                      setStartNodeId(nodeId)
-                      clearRoute()
-                    }}
-                    placeholder="Search room, entrance or teacher..."
-                    value={startNodeId}
-                  />
-                </label>
+                <form onSubmit={handleNavigate}>
+                  <label className="user-navigation-field">
+                    <span>From</span>
+                    <SearchableLocationSelect
+                      ariaLabel="Search starting point"
+                      excludedValue={endNodeId}
+                      groups={destinationGroups}
+                      onChange={(nodeId) => {
+                        setStartNodeId(nodeId)
+                        clearRoute()
+                      }}
+                      placeholder="Search room, entrance or teacher..."
+                      value={startNodeId}
+                    />
+                  </label>
 
-                <button
-                  aria-label="Swap starting point and destination"
-                  className="user-swap-button"
-                  disabled={!startNodeId && !endNodeId}
-                  onClick={swapLocations}
-                  type="button"
-                >
-                  ⇅
-                </button>
-
-                <label className="user-navigation-field">
-                  <span>To</span>
-                  <SearchableLocationSelect
-                    ariaLabel="Search destination point"
-                    excludedValue={startNodeId}
-                    groups={destinationGroups}
-                    onChange={(nodeId) => {
-                      setEndNodeId(nodeId)
-                      clearRoute()
-                    }}
-                    placeholder="Search room, entrance or teacher..."
-                    value={endNodeId}
-                  />
-                </label>
-
-                {startNodeId && startNodeId === endNodeId && (
-                  <p className="user-navigation-message" role="status">
-                    Starting point and destination must be different.
-                  </p>
-                )}
-
-                {message && <p className="user-navigation-message" role="status">{message}</p>}
-                {error && <p className="user-navigation-error" role="alert">{error}</p>}
-
-                <div className="user-route-actions">
                   <button
-                    className="user-navigate-button"
-                    disabled={loading || navigating || !startNodeId || !endNodeId || startNodeId === endNodeId}
-                    type="submit"
-                  >
-                    <span>{navigating ? 'Finding route…' : 'Find route'}</span>
-                    <span aria-hidden="true">↗</span>
-                  </button>
-                  <button
-                    className="user-clear-button"
-                    disabled={!startNodeId && !endNodeId && !route}
-                    onClick={() => {
-                      setStartNodeId('')
-                      setEndNodeId('')
-                      clearRoute()
-                    }}
+                    aria-label="Swap starting point and destination"
+                    className="user-swap-button"
+                    disabled={!startNodeId && !endNodeId}
+                    onClick={swapLocations}
                     type="button"
                   >
-                    Clear
+                    ⇅
                   </button>
-                </div>
-                {loading && <p className="user-navigation-loading">Loading campus locations…</p>}
-                {!loading && !error && rooms.length === 0 && (
-                  <p className="user-navigation-loading">No rooms are available yet.</p>
-                )}
-              </form>
-            </section>
 
-            <section aria-label="Map context" className="user-context-panel">
-              <div className="user-card-heading">
-                <div>
-                  <span className="user-section-index">MAP CONTEXT</span>
-                  <h2>Explore campus</h2>
+                  <label className="user-navigation-field">
+                    <span>To</span>
+                    <SearchableLocationSelect
+                      ariaLabel="Search destination point"
+                      excludedValue={startNodeId}
+                      groups={destinationGroups}
+                      onChange={(nodeId) => {
+                        setEndNodeId(nodeId)
+                        clearRoute()
+                      }}
+                      placeholder="Search room, entrance or teacher..."
+                      value={endNodeId}
+                    />
+                  </label>
+
+                  {startNodeId && startNodeId === endNodeId && (
+                    <p className="user-navigation-message" role="status">
+                      Starting point and destination must be different.
+                    </p>
+                  )}
+
+                  {message && <p className="user-navigation-message" role="status">{message}</p>}
+                  {error && <p className="user-navigation-error" role="alert">{error}</p>}
+
+                  <div className="user-route-actions">
+                    <button
+                      className="user-navigate-button"
+                      disabled={loading || navigating || !startNodeId || !endNodeId || startNodeId === endNodeId}
+                      type="submit"
+                    >
+                      <span>{navigating ? 'Finding route…' : 'Find route'}</span>
+                      <span aria-hidden="true">↗</span>
+                    </button>
+                    <button
+                      className="user-clear-button"
+                      disabled={!startNodeId && !endNodeId && !route}
+                      onClick={() => {
+                        setStartNodeId('')
+                        setEndNodeId('')
+                        clearRoute()
+                      }}
+                      type="button"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  {loading && <p className="user-navigation-loading">Loading campus locations…</p>}
+                  {!loading && !error && rooms.length === 0 && (
+                    <p className="user-navigation-loading">No rooms are available yet.</p>
+                  )}
+                </form>
+              </section>
+
+              <section aria-label="Map context" className="user-context-panel">
+                <div className="user-card-heading">
+                  <div>
+                    <span className="user-section-index">MAP CONTEXT</span>
+                    <h2>Explore campus</h2>
+                  </div>
                 </div>
-              </div>
-              <div className="user-context-list">
-                {mapContexts.map((context) => (
-                  <button
-                    aria-pressed={activeContextId === context.id}
-                    className={`user-context-button${activeContextId === context.id ? ' is-active' : ''}`}
-                    key={context.id}
-                    onClick={() => selectContext(context.id)}
-                    type="button"
-                  >
-                    <span>{context.name}</span>
-                    <small>{context.meta}</small>
-                  </button>
-                ))}
-              </div>
-            </section>
+                <div className="user-context-list">
+                  {mapContexts.map((context) => (
+                    <button
+                      aria-pressed={activeContextId === context.id}
+                      className={`user-context-button${activeContextId === context.id ? ' is-active' : ''}`}
+                      key={context.id}
+                      onClick={() => selectContext(context.id)}
+                      type="button"
+                    >
+                      <span>{context.name}</span>
+                      <small>{context.meta}</small>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </div>
           </aside>
 
-          <section aria-live="polite" className="user-route-results">
+          <section
+            aria-live="polite"
+            className={`user-route-results${route ? ' has-route' : ''}${isMobileNavigationPanelExpanded ? ' is-panel-expanded' : ''}`}
+          >
             <div className="user-map-header">
               <div>
                 <span className="user-section-index">NAVIGATION VIEW</span>
