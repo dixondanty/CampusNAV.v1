@@ -29,7 +29,9 @@ process.env.GRIDFS_BUCKET_NAME = `floorPlansTest_${process.pid}`
 const mongoose = require('mongoose')
 const app = require('../server')
 const Building = require('../models/Building')
+const Connection = require('../models/Connection')
 const Floor = require('../models/Floor')
+const Node = require('../models/Node')
 
 let server
 let baseUrl
@@ -148,4 +150,70 @@ test('serves concurrent image retrievals', integrationOptions, async () => {
   )
   assert.equal(responses.every((response) => response.status === 200), true)
   await Promise.all(responses.map((response) => response.arrayBuffer()))
+})
+
+test('exports a versioned complete campus snapshot and exact map image', integrationOptions, async () => {
+  const floor = await Floor.create({
+    name: 'Offline campus test floor',
+    context: 'campus',
+    floorNumber: 0,
+    mapImage: '',
+  })
+  const from = await Node.create({
+    name: 'Offline test start',
+    type: 'room',
+    x: 10,
+    y: 20,
+    floorId: floor._id,
+  })
+  const to = await Node.create({
+    name: 'Offline test end',
+    type: 'room',
+    x: 80,
+    y: 90,
+    floorId: floor._id,
+  })
+  const connection = await Connection.create({
+    from: from._id,
+    to: to._id,
+    distance: 12,
+  })
+
+  const versionResponse = await fetch(`${baseUrl}/api/offline/version`)
+  assert.equal(versionResponse.status, 200)
+  const { version } = await versionResponse.json()
+  assert.match(version, /^sha256-[a-f0-9]{64}$/)
+
+  const snapshotResponse = await fetch(
+    `${baseUrl}/api/offline/dataset?version=${encodeURIComponent(version)}`,
+  )
+  assert.equal(snapshotResponse.status, 200)
+  const snapshot = await snapshotResponse.json()
+  assert.equal(snapshot.version, version)
+  assert.ok(snapshot.dataset.floors.some((item) => String(item._id) === String(floor._id)))
+  assert.ok(snapshot.dataset.nodes.some((item) => String(item._id) === String(from._id)))
+  assert.ok(snapshot.dataset.connections.some(
+    (item) => String(item._id) === String(connection._id),
+  ))
+  assert.deepEqual(snapshot.dataset.cabins, [])
+
+  const conflictResponse = await fetch(`${baseUrl}/api/offline/dataset?version=stale`)
+  assert.equal(conflictResponse.status, 409)
+
+  const originalFloor = await Floor.findOne({ name: 'png-floor' })
+  const mapResponse = await fetch(
+    `${baseUrl}/api/offline/maps/${originalFloor.mapImageFileId}`,
+  )
+  assert.equal(mapResponse.status, 200)
+  assert.equal(Buffer.from(await mapResponse.arrayBuffer()).toString(), 'png-test-bytes')
+
+  await Node.create({
+    name: 'Offline version marker',
+    type: 'nav',
+    x: 50,
+    y: 50,
+    floorId: floor._id,
+  })
+  const updatedVersionResponse = await fetch(`${baseUrl}/api/offline/version`)
+  assert.notEqual((await updatedVersionResponse.json()).version, version)
 })

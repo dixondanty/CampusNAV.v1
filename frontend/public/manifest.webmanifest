@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "CampusNAV - Campus Navigation",
+  "short_name": "CampusNAV",
+  "description": "Offline-ready indoor campus navigation.",
+  "start_url": "/user",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#101a30",
+  "theme_color": "#101a30",
+  "icons": [
+    {
+      "src": "/icons/campusnav-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/campusnav-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

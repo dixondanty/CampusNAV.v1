@@ -5,9 +5,17 @@ import buildRouteSegments from '../utils/buildRouteSegments.js'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 import mapImageUrl from '../utils/mapImageUrl.js'
 import { MAX_MAP_ZOOM, MAP_ZOOM_STEP, MIN_MAP_ZOOM, clampMapZoom } from '../utils/mapZoom.js'
+import {
+  API_URL as OFFLINE_API_URL,
+  getActiveCampusDataset,
+  isCampusDatasetUsable,
+  synchronizeCampusDataset,
+} from '../utils/campusOfflineStore.js'
+import runOfflineDijkstra from '../utils/runOfflineDijkstra.js'
 
 const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
-const API_URL = `${SERVER_URL}/api`
+const API_URL = OFFLINE_API_URL
+const APP_VERSION = __CAMPUSNAV_APP_VERSION__
 
 async function readResponse(response) {
   const data = await response.json()
@@ -18,6 +26,9 @@ async function readResponse(response) {
 }
 
 function versionedMapImageUrl(serverUrl, imagePath, fileId) {
+  if (typeof imagePath === 'string' && imagePath.startsWith('blob:')) {
+    return imagePath
+  }
   const url = mapImageUrl(serverUrl, imagePath)
   if (!url || !fileId) {
     return url
@@ -25,7 +36,6 @@ function versionedMapImageUrl(serverUrl, imagePath, fileId) {
   return `${url}${url.includes('?') ? '&' : '?'}v=${encodeURIComponent(String(fileId))}`
 }
 
-let roomsBootstrapRequest
 const decodedMapImages = new Map()
 const decodedMapImagesReady = new Set()
 const decodedMapImageSources = new Map()
@@ -80,18 +90,6 @@ function loadDecodedMapImage(url, retainSource = false) {
   return promise
 }
 
-function loadRoomsBootstrap() {
-  if (!roomsBootstrapRequest) {
-    roomsBootstrapRequest = fetch(`${API_URL}/navigation/bootstrap`)
-      .then(readResponse)
-      .finally(() => {
-        roomsBootstrapRequest = null
-      })
-  }
-
-  return roomsBootstrapRequest
-}
-
 function UserPage() {
   const [rooms, setRooms] = useState([])
   const [entrances, setEntrances] = useState([])
@@ -114,8 +112,29 @@ function UserPage() {
   const [errorMapImageUrl, setErrorMapImageUrl] = useState('')
   const [loadedMapImageUrl, setLoadedMapImageUrl] = useState('')
   const [mapImageStates, setMapImageStates] = useState({})
+  const [activeTab, setActiveTab] = useState('map')
+  const [campusDataset, setCampusDataset] = useState(null)
+  const [campusSyncState, setCampusSyncState] = useState({
+    status: 'checking',
+    progress: null,
+    completed: 0,
+    total: 0,
+    current: '',
+    error: '',
+    lastSuccessfulSync: null,
+  })
+  const [isOnline, setIsOnline] = useState(navigator.onLine)
+  const [serviceWorkerRegistration, setServiceWorkerRegistration] = useState(null)
+  const [appUpdateAvailable, setAppUpdateAvailable] = useState(false)
+  const [installPrompt, setInstallPrompt] = useState(null)
   const [isMobileNavigationPanelExpanded, setIsMobileNavigationPanelExpanded] = useState(false)
   const mapImageStatesRef = useRef(mapImageStates)
+  const campusDatasetRef = useRef(null)
+  const campusDatasetApplyRef = useRef(null)
+  const routeRef = useRef(route)
+  const campusSyncPromiseRef = useRef(null)
+  const campusMapObjectUrlsRef = useRef(new Set())
+  const appUpdateReloadRef = useRef(false)
   const [isMapPanning, setIsMapPanning] = useState(false)
   const mapViewRef = useRef(mapView)
   const mapStageRef = useRef(null)
@@ -131,36 +150,215 @@ function UserPage() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    let active = true
+    routeRef.current = route
+  }, [route])
 
-    async function loadRooms() {
-      try {
-        const [bootstrap, buildingList] = await Promise.all([
-          loadRoomsBootstrap(),
-          fetch(`${API_URL}/buildings`).then(readResponse),
-        ])
-
-        if (active) {
-          setFloors(bootstrap.floors)
-          setRooms(bootstrap.rooms)
-          setEntrances(bootstrap.entrances || [])
-          setCabins(bootstrap.cabins || [])
-          setBuildings(buildingList)
-        }
-      } catch (loadError) {
-        if (active) {
-          setError(loadError.message)
-        }
-      } finally {
-        if (active) {
-          setLoading(false)
-        }
-      }
+  const applyCampusDataset = useCallback((storedDataset) => {
+    if (!storedDataset?.data) {
+      return Promise.reject(new Error('No complete offline campus dataset is available.'))
+    }
+    if (campusDatasetRef.current?.version === storedDataset.version) {
+      return Promise.resolve()
+    }
+    if (campusDatasetApplyRef.current?.version === storedDataset.version) {
+      return campusDatasetApplyRef.current.promise
     }
 
-    loadRooms()
+    const previousObjectUrls = [...campusMapObjectUrlsRef.current]
+    const application = Promise.resolve().then(() => {
+      const preparedFloors = storedDataset.data.floors.map((floor) => {
+        const imageBlob = storedDataset.maps.get(String(floor._id))
+        if (!imageBlob) {
+          return floor
+        }
+        const localImageUrl = URL.createObjectURL(imageBlob)
+        campusMapObjectUrlsRef.current.add(localImageUrl)
+        return { ...floor, mapImage: localImageUrl }
+      })
+      const data = { ...storedDataset.data, floors: preparedFloors }
+      const preparedDataset = { ...storedDataset, data }
+      campusDatasetRef.current = preparedDataset
+      setCampusDataset(preparedDataset)
+      setFloors(data.floors)
+      setRooms(data.nodes.filter((node) => node.type === 'room'))
+      setEntrances(data.nodes.filter(
+        (node) => node.type === 'buildingConnection' && node.connectionType === 'entrance',
+      ))
+      setCabins(data.cabins)
+      setBuildings(data.buildings)
+      mapImageStatesRef.current = {}
+      setMapImageStates({})
+      setErrorMapImageUrl('')
+      setLoadedMapImageUrl('')
+      setCampusSyncState((current) => ({
+        ...current,
+        deferredForRoute: false,
+        lastSuccessfulSync: storedDataset.syncedAt || current.lastSuccessfulSync,
+      }))
+      setError('')
+      setLoading(false)
+      requestAnimationFrame(() => {
+        previousObjectUrls.forEach((url) => {
+          URL.revokeObjectURL(url)
+          campusMapObjectUrlsRef.current.delete(url)
+        })
+      })
+    }).finally(() => {
+      if (campusDatasetApplyRef.current?.version === storedDataset.version) {
+        campusDatasetApplyRef.current = null
+      }
+    })
+    campusDatasetApplyRef.current = { version: storedDataset.version, promise: application }
+    return application
+  }, [])
+
+  const performCampusSync = useCallback(async () => {
+    if (campusSyncPromiseRef.current) {
+      return campusSyncPromiseRef.current
+    }
+
+    const synchronization = (async () => {
+      try {
+        const result = await synchronizeCampusDataset((progress) => {
+          setCampusSyncState((current) => ({ ...current, ...progress }))
+        })
+        setCampusSyncState((current) => ({
+          ...current,
+          lastSuccessfulSync: result.dataset.syncedAt || current.lastSuccessfulSync,
+        }))
+        if (!routeRef.current && campusDatasetRef.current?.version !== result.dataset.version) {
+          await applyCampusDataset(result.dataset)
+        } else if (result.changed) {
+          setCampusSyncState((current) => ({ ...current, deferredForRoute: true }))
+        }
+        return result
+      } catch (syncError) {
+        setCampusSyncState((current) => ({
+          ...current,
+          status: 'failed',
+          error: syncError.message,
+        }))
+        const stored = await getActiveCampusDataset().catch((storageError) => {
+          setCampusSyncState((current) => ({
+            ...current,
+            error: `${syncError.message} Offline storage: ${storageError.message}`,
+          }))
+          return null
+        })
+        if (stored && !campusDatasetRef.current) {
+          await applyCampusDataset(stored)
+        }
+        if (!stored && !campusDatasetRef.current) {
+          setError('Campus data is unavailable. Connect to the internet to download it for offline use.')
+          setLoading(false)
+        }
+        return null
+      } finally {
+        campusSyncPromiseRef.current = null
+      }
+    })()
+    campusSyncPromiseRef.current = synchronization
+    return synchronization
+  }, [applyCampusDataset])
+
+  useEffect(() => {
+    performCampusSync()
+    function handleOnline() {
+      setIsOnline(true)
+      performCampusSync()
+    }
+    function handleOffline() {
+      setIsOnline(false)
+    }
+    function handleVisibilityChange() {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        performCampusSync()
+      }
+    }
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        performCampusSync()
+      }
+    }, 15 * 60 * 1000)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.clearInterval(intervalId)
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [performCampusSync])
+
+  useEffect(() => {
+    if (route || !campusDatasetRef.current) {
+      return undefined
+    }
+    let active = true
+    getActiveCampusDataset().then((stored) => {
+      if (active && stored && stored.version !== campusDatasetRef.current?.version) {
+        return applyCampusDataset(stored)
+      }
+      return undefined
+    }).catch((storageError) => {
+      console.error('The latest offline campus dataset could not be loaded:', storageError)
+    })
     return () => {
       active = false
+    }
+  }, [route, campusDataset?.version, applyCampusDataset])
+
+  useEffect(() => () => {
+    campusMapObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+    campusMapObjectUrlsRef.current.clear()
+  }, [])
+
+  useEffect(() => {
+    function handleInstallPrompt(event) {
+      event.preventDefault()
+      setInstallPrompt(event)
+    }
+    window.addEventListener('beforeinstallprompt', handleInstallPrompt)
+    return () => window.removeEventListener('beforeinstallprompt', handleInstallPrompt)
+  }, [])
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) {
+      return undefined
+    }
+    let active = true
+    let registration
+    const updateAvailable = () => {
+      if (active) {
+        setAppUpdateAvailable(Boolean(registration?.waiting))
+      }
+    }
+    const handleControllerChange = () => {
+      if (appUpdateReloadRef.current) {
+        window.location.reload()
+      }
+    }
+    navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange)
+    navigator.serviceWorker.getRegistration().then((currentRegistration) => {
+      if (!active || !currentRegistration) {
+        return
+      }
+      registration = currentRegistration
+      setServiceWorkerRegistration(currentRegistration)
+      updateAvailable()
+      currentRegistration.addEventListener('updatefound', () => {
+        currentRegistration.installing?.addEventListener('statechange', updateAvailable)
+      })
+      currentRegistration.update().catch((updateError) => {
+        console.error('CampusNAV application update check failed:', updateError)
+      })
+    }).catch((registrationError) => {
+      console.error('CampusNAV service worker could not be inspected:', registrationError)
+    })
+    return () => {
+      active = false
+      navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange)
     }
   }, [])
 
@@ -532,8 +730,10 @@ function UserPage() {
       : current)
   }, [updateMapView])
 
-  function handleMapImageLoad() {
-    setLoadedMapImageUrl(displayMapImageUrl)
+  function handleMapImageLoad(event) {
+    const loadedUrl = event.currentTarget.getAttribute('src') || displayMapImageUrl
+    setLoadedMapImageUrl(loadedUrl)
+    setErrorMapImageUrl((currentUrl) => currentUrl === loadedUrl ? '' : currentUrl)
     updateMapZoomLimit()
   }
 
@@ -927,10 +1127,25 @@ function UserPage() {
         return
       }
 
-      const response = await fetch(
-        `${API_URL}/navigation/path?start=${encodeURIComponent(resolvedStartNodeId)}&end=${encodeURIComponent(resolvedEndNodeId)}`,
-      )
-      const result = await readResponse(response)
+      let result
+      let usedOfflineRoute = false
+      try {
+        const response = await fetch(
+          `${API_URL}/navigation/path?start=${encodeURIComponent(resolvedStartNodeId)}&end=${encodeURIComponent(resolvedEndNodeId)}`,
+        )
+        result = await readResponse(response)
+      } catch (routeError) {
+        if (!campusDatasetRef.current) {
+          throw routeError
+        }
+        result = runOfflineDijkstra(
+          resolvedStartNodeId,
+          resolvedEndNodeId,
+          campusDatasetRef.current.data.nodes,
+          campusDatasetRef.current.data.connections,
+        )
+        usedOfflineRoute = true
+      }
       if (!result.found) {
         setMessage('No route found between the selected points.')
         return
@@ -940,6 +1155,9 @@ function UserPage() {
         path: result.path.map(decoratePathNode),
       }
       setRoute(decoratedResult)
+      if (usedOfflineRoute) {
+        setMessage('Using the saved campus map and navigation data.')
+      }
       setActiveRouteSegmentIndex(0)
       const firstFloorId = getNodeFloorId(decoratedResult.path[0])
       if (firstFloorId && floorById.get(firstFloorId)) {
@@ -982,7 +1200,37 @@ function UserPage() {
 
   function handleLogout() {
     sessionStorage.removeItem('role')
+    localStorage.removeItem('campusnav-user-session')
     navigate('/')
+  }
+
+  async function handleInstallApp() {
+    if (!installPrompt) {
+      return
+    }
+    await installPrompt.prompt()
+    await installPrompt.userChoice
+    setInstallPrompt(null)
+  }
+
+  function handleApplyAppUpdate() {
+    if (route || !serviceWorkerRegistration?.waiting) {
+      return
+    }
+    appUpdateReloadRef.current = true
+    serviceWorkerRegistration.waiting.postMessage('ACTIVATE_CAMPUSNAV_UPDATE')
+  }
+
+  function handleRefreshCampusData() {
+    if (navigator.onLine) {
+      performCampusSync()
+    } else {
+      setCampusSyncState((current) => ({
+        ...current,
+        status: 'failed',
+        error: 'Connect to the internet before refreshing campus data.',
+      }))
+    }
   }
 
   function floorSegments(floorId) {
@@ -1068,6 +1316,28 @@ function UserPage() {
     }
     return transitions.find((transition) => transition.afterFloorId === activeRouteGuidanceFloorId)?.message || ''
   })()
+  const expectedOfflineMapCount = campusDataset?.data.floors.length || 0
+  const availableOfflineMapCount = campusDataset
+    ? campusDataset.data.floors.filter((floor) => campusDataset.maps.has(String(floor._id))).length
+    : 0
+  const offlineDataReady = isCampusDatasetUsable(campusDataset) &&
+    expectedOfflineMapCount > 0 &&
+    availableOfflineMapCount === expectedOfflineMapCount
+  const campusDataStatusLabel = campusSyncState.status === 'synchronizing'
+    ? 'Synchronizing'
+    : campusSyncState.status === 'checking'
+      ? 'Checking for updates'
+      : campusSyncState.status === 'failed'
+        ? offlineDataReady ? 'Update failed · saved data available' : 'Failed'
+        : offlineDataReady
+          ? 'Up to date'
+          : 'Offline navigation not ready'
+  const lastSyncLabel = campusSyncState.lastSuccessfulSync
+    ? new Date(campusSyncState.lastSuccessfulSync).toLocaleString()
+    : 'Never synchronized'
+  const signedInRole = sessionStorage.getItem('role') ||
+    localStorage.getItem('campusnav-user-session') ||
+    'user'
 
   useEffect(() => {
     if (!routeFrameRequest || routeFrameRequest.floorId !== displayFloorId) {
@@ -1279,7 +1549,7 @@ function UserPage() {
   ])
 
   return (
-    <main className="user-navigation-page">
+    <main className={`user-navigation-page${activeTab === 'dashboard' ? ' is-dashboard-active' : ''}`}>
       <header className="user-navigation-header">
         <div className="user-navigation-brand">
           <span aria-hidden="true" className="user-brand-mark">C</span>
@@ -1597,6 +1867,169 @@ function UserPage() {
           </section>
         </div>
       </div>
+
+      <section
+        aria-label="CampusNAV dashboard"
+        className="user-mobile-dashboard"
+        hidden={activeTab !== 'dashboard'}
+      >
+        <div className="user-dashboard-heading">
+          <span className="user-section-index">CAMPUSNAV</span>
+          <h1>Dashboard</h1>
+          <p>Campus information and offline availability.</p>
+        </div>
+
+        <section aria-labelledby="user-profile-heading" className="user-dashboard-card">
+          <h2 id="user-profile-heading">My Profile</h2>
+          <div className="user-dashboard-stat">
+            <span>Account role</span>
+            <strong>{signedInRole === 'admin' ? 'Administrator' : 'Campus user'}</strong>
+          </div>
+          <p>Personal profile details are not provided by the current account service.</p>
+        </section>
+
+        <section aria-labelledby="user-updates-heading" className="user-dashboard-card">
+          <h2 id="user-updates-heading">Campus Updates</h2>
+          <p>No campus notice or announcement feed is configured in this application.</p>
+        </section>
+
+        <section aria-labelledby="user-offline-heading" className="user-dashboard-card">
+          <div className="user-dashboard-card-title">
+            <h2 id="user-offline-heading">Offline Data</h2>
+            <button
+              aria-label="Refresh campus data"
+              className="user-dashboard-refresh"
+              disabled={campusSyncState.status === 'synchronizing' || campusSyncState.status === 'checking'}
+              onClick={handleRefreshCampusData}
+              type="button"
+            >
+              Refresh
+            </button>
+          </div>
+          <div className="user-dashboard-stat">
+            <span>Internet connection</span>
+            <strong className={isOnline ? 'is-online' : 'is-offline'}>{isOnline ? 'Online' : 'Offline'}</strong>
+          </div>
+          <div className="user-dashboard-stat">
+            <span>Campus data</span>
+            <strong>{campusDataStatusLabel}</strong>
+          </div>
+          <div className="user-dashboard-stat">
+            <span>Last successful synchronization</span>
+            <strong>{lastSyncLabel}</strong>
+          </div>
+          <div className="user-dashboard-stat">
+            <span>Offline map images</span>
+            <strong>
+              {campusDataset
+                ? `${availableOfflineMapCount} of ${expectedOfflineMapCount} available`
+                : 'No campus dataset downloaded'}
+            </strong>
+          </div>
+          <div className="user-dashboard-stat">
+            <span>Campus coverage</span>
+            <strong>
+              {campusDataset
+                ? `${campusDataset.data.buildings.length} buildings · ${campusDataset.data.floors.length} floors`
+                : 'No campus dataset downloaded'}
+            </strong>
+          </div>
+          {campusSyncState.status === 'synchronizing' && (
+            <div className="user-dashboard-progress">
+              <progress max="1" value={campusSyncState.progress ?? 0} />
+              <span>
+                {campusSyncState.current
+                  ? `Downloading ${campusSyncState.current}`
+                  : 'Preparing campus data'}
+                {campusSyncState.total
+                  ? ` · ${campusSyncState.completed} of ${campusSyncState.total} maps`
+                  : ''}
+              </span>
+            </div>
+          )}
+          {campusSyncState.error && (
+            <p className="user-dashboard-error" role="status">{campusSyncState.error}</p>
+          )}
+          {campusSyncState.deferredForRoute && route && (
+            <p className="user-dashboard-note">The saved dataset has updated. This route continues on its original data until you finish navigation.</p>
+          )}
+          {!offlineDataReady && (
+            <p className="user-dashboard-note">Offline navigation is not ready until the complete campus dataset and its available floor maps are downloaded.</p>
+          )}
+        </section>
+
+        <section aria-labelledby="user-about-heading" className="user-dashboard-card">
+          <h2 id="user-about-heading">About CampusNAV</h2>
+          <div className="user-dashboard-stat">
+            <span>Application version</span>
+            <strong>{APP_VERSION}</strong>
+          </div>
+          <div className="user-dashboard-stat">
+            <span>Application update</span>
+            <strong>{appUpdateAvailable ? 'Update ready' : 'No update detected'}</strong>
+          </div>
+          {appUpdateAvailable && (
+            <div className="user-dashboard-update">
+              <p>
+                {route
+                  ? 'An update is ready. Finish or clear the current route before applying it.'
+                  : 'A new application version is ready to install.'}
+              </p>
+              <button
+                disabled={Boolean(route)}
+                onClick={handleApplyAppUpdate}
+                type="button"
+              >
+                Apply application update
+              </button>
+            </div>
+          )}
+          {installPrompt ? (
+            <button className="user-dashboard-install" onClick={handleInstallApp} type="button">
+              Install CampusNAV
+            </button>
+          ) : (
+            <p>
+              {window.matchMedia('(display-mode: standalone)').matches || navigator.standalone
+                ? 'CampusNAV is running as an installed app.'
+                : 'Install using your browser’s Install App or Add to Home Screen option when available.'}
+            </p>
+          )}
+          <p>Campus maps and route data are stored separately from application updates.</p>
+        </section>
+      </section>
+
+      <nav aria-label="Main navigation" className="user-mobile-bottom-nav">
+        <button
+          aria-label="Map"
+          aria-pressed={activeTab === 'map'}
+          className={activeTab === 'map' ? 'is-active' : ''}
+          onClick={() => setActiveTab('map')}
+          title="Map"
+          type="button"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z" />
+            <path d="M9 3v15m6-12v15" />
+          </svg>
+        </button>
+        <button
+          aria-label="Dashboard"
+          aria-pressed={activeTab === 'dashboard'}
+          className={activeTab === 'dashboard' ? 'is-active' : ''}
+          onClick={() => setActiveTab('dashboard')}
+          title="Dashboard"
+          type="button"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <rect height="7" rx="1.5" width="7" x="3" y="3" />
+            <rect height="7" rx="1.5" width="7" x="14" y="3" />
+            <rect height="7" rx="1.5" width="7" x="3" y="14" />
+            <rect height="7" rx="1.5" width="7" x="14" y="14" />
+          </svg>
+          {appUpdateAvailable && <span aria-hidden="true" className="user-mobile-nav-dot" />}
+        </button>
+      </nav>
     </main>
   )
 }

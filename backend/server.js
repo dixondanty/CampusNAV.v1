@@ -13,6 +13,7 @@ const floorsRoute = require('./routes/floors')
 const healthRoute = require('./routes/health')
 const navigationRoute = require('./routes/navigation')
 const nodesRoute = require('./routes/nodes')
+const offlineRoute = require('./routes/offline')
 const Floor = require('./models/Floor')
 const Node = require('./models/Node')
 const TeacherCabin = require('./models/TeacherCabin')
@@ -69,6 +70,7 @@ app.get('/api/navigation/bootstrap', async (req, res) => {
   }
 })
 app.use('/api/navigation', navigationRoute)
+app.use('/api/offline', offlineRoute)
 
 app.use((error, req, res, next) => {
   if (error.name === 'MulterError' || error.status === 400) {

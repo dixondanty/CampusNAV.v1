@@ -22,6 +22,10 @@ function LoginPage() {
     }
 
     sessionStorage.setItem('role', account.role)
+    localStorage.removeItem('campusnav-user-session')
+    if (account.role === 'user') {
+      localStorage.setItem('campusnav-user-session', 'user')
+    }
     navigate(`/${account.role}`)
   }
 
