@@ -1,10 +1,11 @@
 # CampusNAV – Campus Navigation
 
-CampusNAV is a student project for indoor campus navigation across floors. It uses a React/Vite frontend and an Express/Node.js backend with MongoDB Atlas and Mongoose.
+CampusNAV is a public indoor campus navigation website and installable offline-first PWA. It uses a React/Vite frontend and an Express/Node.js backend with MongoDB Atlas and Mongoose.
 
 ## Features
 
-- Demo login with Admin and User roles and protected application routes.
+- Public User Mode with no login or registration requirement.
+- Separate Google Identity Services login for the single configured CampusNAV Admin.
 - Admin Map Editor for creating floors, uploading floor maps, and placing navigation, room, and stair nodes.
 - Stair Part 1 / Part 2 nodes with named stair groups for identifying physical staircases.
 - Bidirectional graph connections, including adjacent-floor stair connections validated by stair group and floor number.
@@ -12,18 +13,18 @@ CampusNAV is a student project for indoor campus navigation across floors. It us
 - Same-floor route lines on the floor map and multi-floor route instructions between floor maps.
 - MongoDB storage for floors, nodes, and connections; uploaded map images are stored by the backend.
 
-Authentication is a presentation-only browser demo using the accounts below. It is not production authentication.
-
-| Role | Username | Password |
-| --- | --- | --- |
-| Admin | `admin` | `admin_campusnav123` |
-| User | `user` | `user@123nav` |
+The public website opens directly to User Mode. Admin access is available only
+from the separate Admin Login page and requires a server-verified Google
+Workspace ID token plus an active HttpOnly session cookie. Admin write APIs are
+protected by the backend; campus navigation and read-only campus data remain
+public.
 
 ## Run the frontend
 
 ```powershell
 cd frontend
 npm install
+Copy-Item .env.example .env
 npm run dev
 ```
 
@@ -33,7 +34,11 @@ Open the local URL printed by Vite.
 
 1. Copy `backend/.env.example` to `backend/.env`.
 2. Set `MONGODB_URI` to your MongoDB Atlas connection string.
-3. Optionally set `UPLOAD_DIR` to change where uploaded floor images are stored.
+3. Set `GOOGLE_CLIENT_ID` to the Google OAuth Web Client ID and `ADMIN_EMAIL`
+   to the one approved `@rajagiri.edu.in` account.
+4. Set `FRONTEND_ORIGIN` to the exact local frontend origin
+   (`http://localhost:5173` by default).
+5. Optionally set `UPLOAD_DIR` to change where uploaded floor images are stored.
 4. Run:
 
 ```powershell
@@ -43,6 +48,46 @@ npm start
 ```
 
 The API listens on port 5000 by default. Its health endpoint is `http://localhost:5000/api/health`.
+
+### Google Admin authentication deployment
+
+The backend verifies Google ID tokens with `google-auth-library`; it does not
+use a Google Client Secret or request Gmail/Drive permissions. The configured
+email must be the one approved, verified `@rajagiri.edu.in` account. The
+backend also requires Google's signed `hd` claim to match the Workspace domain.
+
+Configure these values without committing them:
+
+| Platform | Variable | Value |
+| --- | --- | --- |
+| Vercel | `VITE_GOOGLE_CLIENT_ID` | Google OAuth Web Client ID |
+| Vercel | `CAMPUSNAV_BACKEND_ORIGIN` | HTTPS origin of the Render API service, with no path or trailing slash |
+| Vercel | `VITE_API_URL` | Leave unset so browser requests use the same-origin Vercel proxy |
+| Render | `GOOGLE_CLIENT_ID` | The same Web Client ID used by Vercel |
+| Render | `ADMIN_EMAIL` | The one approved Admin email; must end in `@rajagiri.edu.in` |
+| Render | `FRONTEND_ORIGIN` | Exact public Vercel website origin, e.g. its configured HTTPS origin |
+
+`frontend/vercel.json` forwards `/api/*` and legacy `/uploads/*` through
+Vercel to `CAMPUSNAV_BACKEND_ORIGIN`. This gives the browser a same-origin
+session cookie (`HttpOnly`, `Secure` in production, `SameSite=Lax`) instead of
+relying on third-party cookies between Vercel and Render. In local development,
+the frontend calls `http://localhost:5000` directly and the backend allows the
+configured `FRONTEND_ORIGIN`.
+`FRONTEND_ORIGIN` accepts a comma-separated allowlist when specific Vercel
+preview origins also need access; avoid broad wildcard origins.
+
+In Google Cloud, create a **Web application** OAuth client, add the exact
+website and local development origins to its authorized JavaScript origins,
+and configure the Rajagiri Workspace domain. Set its Client ID in both
+frontend and backend environments. No OAuth Client Secret or redirect URI is
+needed for the GIS ID-token button. Actual Vercel/Render deployment origins
+and Google credentials are not present in this repository and must be supplied
+in the hosting dashboards before production authentication can be verified.
+
+The installed PWA opens directly to User Mode and does not register Admin
+routes or show an Admin Login entry. Admin pages are lazy-loaded and omitted
+from the service worker's offline app-shell cache; the backend still enforces
+Admin authentication for every data mutation.
 
 ### Persistent map-image storage
 

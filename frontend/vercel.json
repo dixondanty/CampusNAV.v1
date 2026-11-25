@@ -1,8 +1,22 @@
 {
-  "rewrites": [
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "routes": [
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "src": "/api/(.*)",
+      "dest": "$CAMPUSNAV_BACKEND_ORIGIN/api/$1",
+      "env": ["CAMPUSNAV_BACKEND_ORIGIN"]
+    },
+    {
+      "src": "/uploads/(.*)",
+      "dest": "$CAMPUSNAV_BACKEND_ORIGIN/uploads/$1",
+      "env": ["CAMPUSNAV_BACKEND_ORIGIN"]
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
   ]
 }

@@ -16,7 +16,9 @@ function offlineServiceWorker() {
         '/manifest.webmanifest',
         '/icons/campusnav-192.png',
         '/icons/campusnav-512.png',
-        ...Object.keys(bundle).map((file) => `/${file}`),
+        ...Object.keys(bundle)
+          .filter((file) => !bundle[file].isDynamicEntry)
+          .map((file) => `/${file}`),
       ]
       const cacheVersion = createHash('sha256')
         .update(assets.sort().join('\n'))

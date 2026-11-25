@@ -6,6 +6,7 @@ require('dotenv').config()
 const cors = require('cors')
 const express = require('express')
 const mongoose = require('mongoose')
+const authRoute = require('./routes/auth').router
 const buildingsRoute = require('./routes/buildings')
 const cabinsRoute = require('./routes/cabins')
 const connectionsRoute = require('./routes/connections')
@@ -19,11 +20,17 @@ const Node = require('./models/Node')
 const TeacherCabin = require('./models/TeacherCabin')
 const { decorateCabins } = require('./services/cabinDestination')
 const { uploadDirectory } = require('./services/uploadStorage')
+const { getAllowedOrigins, requireAdminMutation } = require('./middleware/adminAuth')
 
 const app = express()
 const port = process.env.PORT || 5000
 
-app.use(cors())
+app.use(cors({
+  origin(origin, callback) {
+    callback(null, Boolean(origin && getAllowedOrigins().has(origin)))
+  },
+  credentials: true,
+}))
 app.use(express.json())
 app.use('/uploads', express.static(uploadDirectory))
 app.use('/uploads', (req, res) => {
@@ -31,11 +38,12 @@ app.use('/uploads', (req, res) => {
   res.status(404).json({ message: 'Uploaded map image not found.' })
 })
 app.use('/api/health', healthRoute)
-app.use('/api/buildings', buildingsRoute)
-app.use('/api/floors', floorsRoute)
-app.use('/api/nodes', nodesRoute)
-app.use('/api/connections', connectionsRoute)
-app.use('/api/cabins', cabinsRoute)
+app.use('/api/auth', authRoute)
+app.use('/api/buildings', requireAdminMutation, buildingsRoute)
+app.use('/api/floors', requireAdminMutation, floorsRoute)
+app.use('/api/nodes', requireAdminMutation, nodesRoute)
+app.use('/api/connections', requireAdminMutation, connectionsRoute)
+app.use('/api/cabins', requireAdminMutation, cabinsRoute)
 app.get('/api/navigation/bootstrap', async (req, res) => {
   try {
     const [floors, roomNodes, entranceNodes, cabinRecords] = await Promise.all([

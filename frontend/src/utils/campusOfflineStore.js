@@ -1,10 +1,10 @@
+import { API_BASE_URL, API_URL, apiFetch } from './api.js'
+
 const DATABASE_NAME = 'campusnav-offline'
 const DATABASE_VERSION = 1
 const DATASET_STORE = 'datasets'
 const MAP_STORE = 'maps'
 const META_STORE = 'metadata'
-
-export const API_URL = `${(import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '')}/api`
 
 let databaseRequest
 
@@ -200,12 +200,12 @@ async function fetchMapBlob(floor, signal) {
   const imageUrl = floor.mapImageFileId
     ? `${API_URL}/offline/maps/${encodeURIComponent(String(floor.mapImageFileId))}`
     : floor.mapImage
-      ? new URL(floor.mapImage, `${API_URL.replace(/\/api$/, '')}/`).href
+      ? new URL(floor.mapImage, `${API_BASE_URL || window.location.origin}/`).href
       : ''
   if (!imageUrl) {
     return null
   }
-  const response = await fetch(imageUrl, { signal })
+  const response = await apiFetch(imageUrl, { signal })
   if (!response.ok) {
     throw new Error(`The full map image for "${floor.name}" could not be downloaded.`)
   }
@@ -239,7 +239,7 @@ export async function synchronizeCampusDataset(onProgress = () => {}) {
   let draftVersion = ''
   try {
     onProgress({ status: 'checking', progress: null, error: '' })
-    const versionInfo = await readJson(await fetch(`${API_URL}/offline/version`, {
+    const versionInfo = await readJson(await apiFetch(`${API_URL}/offline/version`, {
       cache: 'no-store',
       signal: controller.signal,
     }))
@@ -252,7 +252,7 @@ export async function synchronizeCampusDataset(onProgress = () => {}) {
     }
 
     onProgress({ status: 'synchronizing', progress: 0, error: '' })
-    const snapshot = await readJson(await fetch(
+    const snapshot = await readJson(await apiFetch(
       `${API_URL}/offline/dataset?version=${encodeURIComponent(versionInfo.version)}`,
       { cache: 'no-store', signal: controller.signal },
     ))
@@ -284,7 +284,7 @@ export async function synchronizeCampusDataset(onProgress = () => {}) {
       })
     }
 
-    const latestVersion = await readJson(await fetch(`${API_URL}/offline/version`, {
+    const latestVersion = await readJson(await apiFetch(`${API_URL}/offline/version`, {
       cache: 'no-store',
       signal: controller.signal,
     }))

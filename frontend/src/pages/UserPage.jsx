@@ -1,20 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import SearchableLocationSelect from '../components/SearchableLocationSelect.jsx'
 import buildRouteSegments from '../utils/buildRouteSegments.js'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 import mapImageUrl from '../utils/mapImageUrl.js'
 import { MAX_MAP_ZOOM, MAP_ZOOM_STEP, MIN_MAP_ZOOM, clampMapZoom } from '../utils/mapZoom.js'
 import {
-  API_URL as OFFLINE_API_URL,
   getActiveCampusDataset,
   isCampusDatasetUsable,
   synchronizeCampusDataset,
 } from '../utils/campusOfflineStore.js'
 import runOfflineDijkstra from '../utils/runOfflineDijkstra.js'
+import { API_BASE_URL as SERVER_URL, API_URL, apiFetch } from '../utils/api.js'
+import isPwaDisplayMode from '../utils/pwaMode.js'
 
-const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
-const API_URL = OFFLINE_API_URL
 const APP_VERSION = __CAMPUSNAV_APP_VERSION__
 
 async function readResponse(response) {
@@ -36,6 +35,7 @@ function versionedMapImageUrl(serverUrl, imagePath, fileId) {
   return `${url}${url.includes('?') ? '&' : '?'}v=${encodeURIComponent(String(fileId))}`
 }
 
+let roomsBootstrapRequest
 const decodedMapImages = new Map()
 const decodedMapImagesReady = new Set()
 const decodedMapImageSources = new Map()
@@ -90,7 +90,19 @@ function loadDecodedMapImage(url, retainSource = false) {
   return promise
 }
 
+function loadRoomsBootstrap() {
+  if (!roomsBootstrapRequest) {
+    roomsBootstrapRequest = apiFetch(`${API_URL}/navigation/bootstrap`)
+      .then(readResponse)
+      .finally(() => {
+        roomsBootstrapRequest = null
+      })
+  }
+  return roomsBootstrapRequest
+}
+
 function UserPage() {
+  const isPwa = isPwaDisplayMode()
   const [rooms, setRooms] = useState([])
   const [entrances, setEntrances] = useState([])
   const [cabins, setCabins] = useState([])
@@ -126,7 +138,6 @@ function UserPage() {
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const [serviceWorkerRegistration, setServiceWorkerRegistration] = useState(null)
   const [appUpdateAvailable, setAppUpdateAvailable] = useState(false)
-  const [installPrompt, setInstallPrompt] = useState(null)
   const [isMobileNavigationPanelExpanded, setIsMobileNavigationPanelExpanded] = useState(false)
   const mapImageStatesRef = useRef(mapImageStates)
   const campusDatasetRef = useRef(null)
@@ -147,8 +158,6 @@ function UserPage() {
   const routeFrameAnimationRef = useRef(null)
   const routeFrameRequestIdRef = useRef(0)
   const mapWheelHandlerRef = useRef(null)
-  const navigate = useNavigate()
-
   useEffect(() => {
     routeRef.current = route
   }, [route])
@@ -262,6 +271,37 @@ function UserPage() {
   }, [applyCampusDataset])
 
   useEffect(() => {
+    if (!isPwa) {
+      let active = true
+      async function loadWebsiteNavigation() {
+        try {
+          const [bootstrap, buildingList] = await Promise.all([
+            loadRoomsBootstrap(),
+            apiFetch(`${API_URL}/buildings`).then(readResponse),
+          ])
+          if (active) {
+            setFloors(bootstrap.floors)
+            setRooms(bootstrap.rooms)
+            setEntrances(bootstrap.entrances || [])
+            setCabins(bootstrap.cabins || [])
+            setBuildings(buildingList)
+          }
+        } catch (loadError) {
+          if (active) {
+            setError(loadError.message)
+          }
+        } finally {
+          if (active) {
+            setLoading(false)
+          }
+        }
+      }
+      loadWebsiteNavigation()
+      return () => {
+        active = false
+      }
+    }
+
     performCampusSync()
     function handleOnline() {
       setIsOnline(true)
@@ -289,10 +329,10 @@ function UserPage() {
       window.removeEventListener('offline', handleOffline)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [performCampusSync])
+  }, [isPwa, performCampusSync])
 
   useEffect(() => {
-    if (route || !campusDatasetRef.current) {
+    if (!isPwa || route || !campusDatasetRef.current) {
       return undefined
     }
     let active = true
@@ -307,7 +347,7 @@ function UserPage() {
     return () => {
       active = false
     }
-  }, [route, campusDataset?.version, applyCampusDataset])
+  }, [isPwa, route, campusDataset?.version, applyCampusDataset])
 
   useEffect(() => () => {
     campusMapObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
@@ -315,16 +355,7 @@ function UserPage() {
   }, [])
 
   useEffect(() => {
-    function handleInstallPrompt(event) {
-      event.preventDefault()
-      setInstallPrompt(event)
-    }
-    window.addEventListener('beforeinstallprompt', handleInstallPrompt)
-    return () => window.removeEventListener('beforeinstallprompt', handleInstallPrompt)
-  }, [])
-
-  useEffect(() => {
-    if (!('serviceWorker' in navigator)) {
+    if (!isPwa || !('serviceWorker' in navigator)) {
       return undefined
     }
     let active = true
@@ -360,7 +391,7 @@ function UserPage() {
       active = false
       navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange)
     }
-  }, [])
+  }, [isPwa])
 
   const floorById = useMemo(
     () => new Map(floors.map((floor) => [String(floor._id), floor])),
@@ -1130,7 +1161,7 @@ function UserPage() {
       let result
       let usedOfflineRoute = false
       try {
-        const response = await fetch(
+        const response = await apiFetch(
           `${API_URL}/navigation/path?start=${encodeURIComponent(resolvedStartNodeId)}&end=${encodeURIComponent(resolvedEndNodeId)}`,
         )
         result = await readResponse(response)
@@ -1196,21 +1227,6 @@ function UserPage() {
     } else {
       setMessage('A floor in this route is no longer available. Refresh the route or restore the missing floor.')
     }
-  }
-
-  function handleLogout() {
-    sessionStorage.removeItem('role')
-    localStorage.removeItem('campusnav-user-session')
-    navigate('/')
-  }
-
-  async function handleInstallApp() {
-    if (!installPrompt) {
-      return
-    }
-    await installPrompt.prompt()
-    await installPrompt.userChoice
-    setInstallPrompt(null)
   }
 
   function handleApplyAppUpdate() {
@@ -1335,10 +1351,6 @@ function UserPage() {
   const lastSyncLabel = campusSyncState.lastSuccessfulSync
     ? new Date(campusSyncState.lastSuccessfulSync).toLocaleString()
     : 'Never synchronized'
-  const signedInRole = sessionStorage.getItem('role') ||
-    localStorage.getItem('campusnav-user-session') ||
-    'user'
-
   useEffect(() => {
     if (!routeFrameRequest || routeFrameRequest.floorId !== displayFloorId) {
       return undefined
@@ -1549,7 +1561,7 @@ function UserPage() {
   ])
 
   return (
-    <main className={`user-navigation-page${activeTab === 'dashboard' ? ' is-dashboard-active' : ''}`}>
+    <main className={`user-navigation-page${isPwa && activeTab === 'dashboard' ? ' is-dashboard-active' : ''}`}>
       <header className="user-navigation-header">
         <div className="user-navigation-brand">
           <span aria-hidden="true" className="user-brand-mark">C</span>
@@ -1563,13 +1575,11 @@ function UserPage() {
           <span>Live campus map</span>
           {selectedDisplayFloor && <strong>{selectedDisplayFloor.name}</strong>}
         </div>
-        <button
-          className="user-logout-button"
-          onClick={handleLogout}
-          type="button"
-        >
-          Log out
-        </button>
+        {!isPwa && (
+          <Link className="user-logout-button user-admin-login-link" to="/admin-login">
+            Admin Login
+          </Link>
+        )}
       </header>
 
       <div className="user-navigation-content">
@@ -1868,11 +1878,12 @@ function UserPage() {
         </div>
       </div>
 
-      <section
-        aria-label="CampusNAV dashboard"
-        className="user-mobile-dashboard"
-        hidden={activeTab !== 'dashboard'}
-      >
+      {isPwa && (
+        <section
+          aria-label="CampusNAV dashboard"
+          className="user-mobile-dashboard"
+          hidden={activeTab !== 'dashboard'}
+        >
         <div className="user-dashboard-heading">
           <span className="user-section-index">CAMPUSNAV</span>
           <h1>Dashboard</h1>
@@ -1882,10 +1893,10 @@ function UserPage() {
         <section aria-labelledby="user-profile-heading" className="user-dashboard-card">
           <h2 id="user-profile-heading">My Profile</h2>
           <div className="user-dashboard-stat">
-            <span>Account role</span>
-            <strong>{signedInRole === 'admin' ? 'Administrator' : 'Campus user'}</strong>
+            <span>Access</span>
+            <strong>Public campus navigation</strong>
           </div>
-          <p>Personal profile details are not provided by the current account service.</p>
+          <p>No account sign-in is required. Personal profile details are not provided by the current account service.</p>
         </section>
 
         <section aria-labelledby="user-updates-heading" className="user-dashboard-card">
@@ -1984,22 +1995,14 @@ function UserPage() {
               </button>
             </div>
           )}
-          {installPrompt ? (
-            <button className="user-dashboard-install" onClick={handleInstallApp} type="button">
-              Install CampusNAV
-            </button>
-          ) : (
-            <p>
-              {window.matchMedia('(display-mode: standalone)').matches || navigator.standalone
-                ? 'CampusNAV is running as an installed app.'
-                : 'Install using your browser’s Install App or Add to Home Screen option when available.'}
-            </p>
-          )}
+          <p>CampusNAV is running as an installed app.</p>
           <p>Campus maps and route data are stored separately from application updates.</p>
         </section>
-      </section>
+        </section>
+      )}
 
-      <nav aria-label="Main navigation" className="user-mobile-bottom-nav">
+      {isPwa && (
+        <nav aria-label="Main navigation" className="user-mobile-bottom-nav">
         <button
           aria-label="Map"
           aria-pressed={activeTab === 'map'}
@@ -2029,7 +2032,8 @@ function UserPage() {
           </svg>
           {appUpdateAvailable && <span aria-hidden="true" className="user-mobile-nav-dot" />}
         </button>
-      </nav>
+        </nav>
+      )}
     </main>
   )
 }

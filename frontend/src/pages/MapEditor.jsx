@@ -5,9 +5,8 @@ import buildRouteSegments from '../utils/buildRouteSegments.js'
 import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 import mapImageUrl from '../utils/mapImageUrl.js'
 import { MAP_ZOOM_STEP, MIN_MAP_ZOOM, calculateMaxMapZoom, clampMapZoom } from '../utils/mapZoom.js'
+import { API_BASE_URL as SERVER_URL, API_URL, apiFetch as fetch } from '../utils/api.js'
 
-const SERVER_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
-const API_URL = `${SERVER_URL}/api`
 const PROTECTED_BUILDING_ID = '6ac7e6d91280162920d68aa7'
 const CAMPUS_SELECTION_ID = '__campus__'
 const MIN_LEFT_PANEL = 200
@@ -2361,9 +2360,16 @@ function MapEditor() {
     return entryNode ? `Continue via ${entryNode.name} → ${label}` : `Continue to ${label}`
   })()
 
-  function handleLogout() {
-    sessionStorage.removeItem('role')
-    navigate('/')
+  async function handleLogout() {
+    try {
+      const response = await fetch(`${API_URL}/auth/admin/logout`, { method: 'POST' })
+      if (!response.ok) {
+        throw new Error('The Admin session could not be ended.')
+      }
+      navigate('/admin-login', { replace: true })
+    } catch (logoutError) {
+      setError(logoutError.message)
+    }
   }
 
   return (
