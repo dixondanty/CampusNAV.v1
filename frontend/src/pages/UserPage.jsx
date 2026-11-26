@@ -6,6 +6,7 @@ import groupNodesByFloor from '../utils/groupNodesByFloor.js'
 import mapImageUrl from '../utils/mapImageUrl.js'
 import { MAX_MAP_ZOOM, MAP_ZOOM_STEP, MIN_MAP_ZOOM, clampMapZoom } from '../utils/mapZoom.js'
 import {
+  cleanupCampusDatasetDrafts,
   getActiveCampusDataset,
   isCampusDatasetUsable,
   synchronizeCampusDataset,
@@ -132,6 +133,7 @@ function UserPage() {
     completed: 0,
     total: 0,
     current: '',
+    currentAction: '',
     error: '',
     lastSuccessfulSync: null,
   })
@@ -228,36 +230,71 @@ function UserPage() {
 
     const synchronization = (async () => {
       try {
+        await cleanupCampusDatasetDrafts().catch((cleanupError) => {
+          console.error('Abandoned campus-data drafts could not be cleaned up:', cleanupError)
+        })
+        if (!campusDatasetRef.current) {
+          const stored = await getActiveCampusDataset().catch(() => null)
+          if (stored) {
+            await applyCampusDataset(stored)
+          }
+        }
+        if (navigator.onLine === false) {
+          const dataset = campusDatasetRef.current
+          setCampusSyncState((current) => ({
+            ...current,
+            status: dataset ? 'offline' : 'failed',
+            error: dataset
+              ? ''
+              : 'Campus data is unavailable. Connect to the internet to download it for offline use.',
+            lastSuccessfulSync: dataset?.syncedAt || current.lastSuccessfulSync,
+          }))
+          if (!dataset) {
+            setLoading(false)
+          }
+          return { changed: false, dataset }
+        }
+
         const result = await synchronizeCampusDataset((progress) => {
           setCampusSyncState((current) => ({ ...current, ...progress }))
         })
-        setCampusSyncState((current) => ({
-          ...current,
-          lastSuccessfulSync: result.dataset.syncedAt || current.lastSuccessfulSync,
-        }))
-        if (!routeRef.current && campusDatasetRef.current?.version !== result.dataset.version) {
-          await applyCampusDataset(result.dataset)
-        } else if (result.changed) {
-          setCampusSyncState((current) => ({ ...current, deferredForRoute: true }))
+        if (result.dataset) {
+          setCampusSyncState((current) => ({
+            ...current,
+            lastSuccessfulSync: result.dataset.syncedAt || current.lastSuccessfulSync,
+          }))
+          if (!routeRef.current && campusDatasetRef.current?.version !== result.dataset.version) {
+            await applyCampusDataset(result.dataset)
+          } else if (result.changed) {
+            setCampusSyncState((current) => ({ ...current, deferredForRoute: true }))
+          }
         }
         return result
       } catch (syncError) {
-        setCampusSyncState((current) => ({
-          ...current,
-          status: 'failed',
-          error: syncError.message,
-        }))
+        let storageErrorText = ''
         const stored = await getActiveCampusDataset().catch((storageError) => {
-          setCampusSyncState((current) => ({
-            ...current,
-            error: `${syncError.message} Offline storage: ${storageError.message}`,
-          }))
+          storageErrorText = storageError.message
           return null
         })
         if (stored && !campusDatasetRef.current) {
           await applyCampusDataset(stored)
         }
-        if (!stored && !campusDatasetRef.current) {
+        const hasData = Boolean(campusDatasetRef.current || stored)
+        const offline = navigator.onLine === false
+        const errorText = offline && hasData
+          ? ''
+          : `${syncError.message}${storageErrorText ? ` Offline storage: ${storageErrorText}` : ''}`
+        setCampusSyncState((current) => ({
+          ...current,
+          status: offline && hasData ? 'offline' : 'failed',
+          error: errorText,
+          lastSuccessfulSync: stored?.syncedAt || current.lastSuccessfulSync,
+          deferredForRoute: stored && campusDatasetRef.current &&
+            stored.version !== campusDatasetRef.current.version
+            ? true
+            : current.deferredForRoute,
+        }))
+        if (!hasData) {
           setError('Campus data is unavailable. Connect to the internet to download it for offline use.')
           setLoading(false)
         }
@@ -309,6 +346,13 @@ function UserPage() {
     }
     function handleOffline() {
       setIsOnline(false)
+      setCampusSyncState((current) => ({
+        ...current,
+        status: current.status === 'synchronizing' || current.status === 'checking'
+          ? current.status
+          : campusDatasetRef.current ? 'offline' : 'failed',
+        error: campusDatasetRef.current ? '' : current.error,
+      }))
     }
     function handleVisibilityChange() {
       if (document.visibilityState === 'visible' && navigator.onLine) {
@@ -1160,15 +1204,7 @@ function UserPage() {
 
       let result
       let usedOfflineRoute = false
-      try {
-        const response = await apiFetch(
-          `${API_URL}/navigation/path?start=${encodeURIComponent(resolvedStartNodeId)}&end=${encodeURIComponent(resolvedEndNodeId)}`,
-        )
-        result = await readResponse(response)
-      } catch (routeError) {
-        if (!campusDatasetRef.current) {
-          throw routeError
-        }
+      if (!navigator.onLine && campusDatasetRef.current) {
         result = runOfflineDijkstra(
           resolvedStartNodeId,
           resolvedEndNodeId,
@@ -1176,6 +1212,24 @@ function UserPage() {
           campusDatasetRef.current.data.connections,
         )
         usedOfflineRoute = true
+      } else {
+        try {
+          const response = await apiFetch(
+            `${API_URL}/navigation/path?start=${encodeURIComponent(resolvedStartNodeId)}&end=${encodeURIComponent(resolvedEndNodeId)}`,
+          )
+          result = await readResponse(response)
+        } catch (routeError) {
+          if (!campusDatasetRef.current) {
+            throw routeError
+          }
+          result = runOfflineDijkstra(
+            resolvedStartNodeId,
+            resolvedEndNodeId,
+            campusDatasetRef.current.data.nodes,
+            campusDatasetRef.current.data.connections,
+          )
+          usedOfflineRoute = true
+        }
       }
       if (!result.found) {
         setMessage('No route found between the selected points.')
@@ -1243,8 +1297,8 @@ function UserPage() {
     } else {
       setCampusSyncState((current) => ({
         ...current,
-        status: 'failed',
-        error: 'Connect to the internet before refreshing campus data.',
+        status: campusDatasetRef.current ? 'offline' : 'failed',
+        error: campusDatasetRef.current ? '' : 'Connect to the internet before refreshing campus data.',
       }))
     }
   }
@@ -1332,10 +1386,17 @@ function UserPage() {
     }
     return transitions.find((transition) => transition.afterFloorId === activeRouteGuidanceFloorId)?.message || ''
   })()
-  const expectedOfflineMapCount = campusDataset?.data.floors.length || 0
-  const availableOfflineMapCount = campusDataset
-    ? campusDataset.data.floors.filter((floor) => campusDataset.maps.has(String(floor._id))).length
-    : 0
+  const offlineMapFloors = campusDataset
+    ? campusDataset.data.floors.filter((floor) => Boolean(
+      floor.mapImageFileId ||
+      floor.mapImage ||
+      campusDataset.mapSources?.has(String(floor._id)),
+    ))
+    : []
+  const expectedOfflineMapCount = offlineMapFloors.length
+  const availableOfflineMapCount = offlineMapFloors.filter(
+    (floor) => campusDataset.maps.has(String(floor._id)),
+  ).length
   const offlineDataReady = isCampusDatasetUsable(campusDataset) &&
     expectedOfflineMapCount > 0 &&
     availableOfflineMapCount === expectedOfflineMapCount
@@ -1345,9 +1406,11 @@ function UserPage() {
       ? 'Checking for updates'
       : campusSyncState.status === 'failed'
         ? offlineDataReady ? 'Update failed · saved data available' : 'Failed'
-        : offlineDataReady
-          ? 'Up to date'
-          : 'Offline navigation not ready'
+        : campusSyncState.status === 'offline'
+          ? offlineDataReady ? 'Offline · saved data available' : 'Offline'
+          : offlineDataReady
+            ? 'Up to date'
+            : 'Offline navigation not ready'
   const lastSyncLabel = campusSyncState.lastSuccessfulSync
     ? new Date(campusSyncState.lastSuccessfulSync).toLocaleString()
     : 'Never synchronized'
@@ -1950,7 +2013,9 @@ function UserPage() {
               <progress max="1" value={campusSyncState.progress ?? 0} />
               <span>
                 {campusSyncState.current
-                  ? `Downloading ${campusSyncState.current}`
+                  ? campusSyncState.currentAction === 'reused'
+                    ? `Reusing saved map for ${campusSyncState.current}`
+                    : `Downloading ${campusSyncState.current}`
                   : 'Preparing campus data'}
                 {campusSyncState.total
                   ? ` · ${campusSyncState.completed} of ${campusSyncState.total} maps`
