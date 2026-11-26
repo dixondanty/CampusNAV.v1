@@ -12,10 +12,13 @@ import {
   synchronizeCampusDataset,
 } from '../utils/campusOfflineStore.js'
 import runOfflineDijkstra from '../utils/runOfflineDijkstra.js'
-import { API_BASE_URL as SERVER_URL, API_URL, apiFetch } from '../utils/api.js'
+import { API_BASE_URL as SERVER_URL, API_URL, apiFetch, apiFetchJsonWithRetry } from '../utils/api.js'
 import isPwaDisplayMode from '../utils/pwaMode.js'
 
 const APP_VERSION = __CAMPUSNAV_APP_VERSION__
+const CONNECTING_MESSAGE = 'Connecting to CampusNAV server…'
+const RECONNECTING_MESSAGE = 'The server is taking longer than usual to respond. Reconnecting…'
+const CONNECTION_ERROR_MESSAGE = 'Unable to connect to the CampusNAV server. Please try again.'
 
 async function readResponse(response) {
   const data = await response.json()
@@ -36,7 +39,9 @@ function versionedMapImageUrl(serverUrl, imagePath, fileId) {
   return `${url}${url.includes('?') ? '&' : '?'}v=${encodeURIComponent(String(fileId))}`
 }
 
-let roomsBootstrapRequest
+let websiteBootstrapData
+let websiteBuildingsData
+let websiteBootstrapRequest
 const decodedMapImages = new Map()
 const decodedMapImagesReady = new Set()
 const decodedMapImageSources = new Map()
@@ -91,15 +96,28 @@ function loadDecodedMapImage(url, retainSource = false) {
   return promise
 }
 
-function loadRoomsBootstrap() {
-  if (!roomsBootstrapRequest) {
-    roomsBootstrapRequest = apiFetch(`${API_URL}/navigation/bootstrap`)
-      .then(readResponse)
-      .finally(() => {
-        roomsBootstrapRequest = null
-      })
+function loadWebsiteBootstrap(onRetry) {
+  if (!websiteBootstrapRequest) {
+    websiteBootstrapRequest = Promise.all([
+      websiteBootstrapData
+        ? Promise.resolve(websiteBootstrapData)
+        : apiFetchJsonWithRetry(`${API_URL}/navigation/bootstrap`, undefined, onRetry)
+          .then((data) => {
+            websiteBootstrapData = data
+            return data
+          }),
+      websiteBuildingsData
+        ? Promise.resolve(websiteBuildingsData)
+        : apiFetchJsonWithRetry(`${API_URL}/buildings`, undefined, onRetry)
+          .then((data) => {
+            websiteBuildingsData = data
+            return data
+          }),
+    ]).finally(() => {
+      websiteBootstrapRequest = null
+    })
   }
-  return roomsBootstrapRequest
+  return websiteBootstrapRequest
 }
 
 function UserPage() {
@@ -118,6 +136,7 @@ function UserPage() {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [serverStatus, setServerStatus] = useState(CONNECTING_MESSAGE)
   const [navigating, setNavigating] = useState(false)
   const [mapView, setMapView] = useState({ zoom: 1, panX: 0, panY: 0 })
   const [maxMapZoom, setMaxMapZoom] = useState(1)
@@ -142,6 +161,7 @@ function UserPage() {
   const [appUpdateAvailable, setAppUpdateAvailable] = useState(false)
   const [isMobileNavigationPanelExpanded, setIsMobileNavigationPanelExpanded] = useState(false)
   const mapImageStatesRef = useRef(mapImageStates)
+  const websiteLoadActiveRef = useRef(true)
   const campusDatasetRef = useRef(null)
   const campusDatasetApplyRef = useRef(null)
   const routeRef = useRef(route)
@@ -307,35 +327,42 @@ function UserPage() {
     return synchronization
   }, [applyCampusDataset])
 
-  useEffect(() => {
-    if (!isPwa) {
-      let active = true
-      async function loadWebsiteNavigation() {
-        try {
-          const [bootstrap, buildingList] = await Promise.all([
-            loadRoomsBootstrap(),
-            apiFetch(`${API_URL}/buildings`).then(readResponse),
-          ])
-          if (active) {
-            setFloors(bootstrap.floors)
-            setRooms(bootstrap.rooms)
-            setEntrances(bootstrap.entrances || [])
-            setCabins(bootstrap.cabins || [])
-            setBuildings(buildingList)
-          }
-        } catch (loadError) {
-          if (active) {
-            setError(loadError.message)
-          }
-        } finally {
-          if (active) {
-            setLoading(false)
-          }
+  const loadWebsiteNavigation = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    setServerStatus(CONNECTING_MESSAGE)
+    try {
+      const [bootstrap, buildingList] = await loadWebsiteBootstrap(({ attempt }) => {
+        if (!websiteLoadActiveRef.current) {
+          return
         }
+        setServerStatus(attempt > 1 ? RECONNECTING_MESSAGE : CONNECTING_MESSAGE)
+      })
+      if (!websiteLoadActiveRef.current) {
+        return
       }
-      loadWebsiteNavigation()
+      setFloors(bootstrap.floors)
+      setRooms(bootstrap.rooms)
+      setEntrances(bootstrap.entrances || [])
+      setCabins(bootstrap.cabins || [])
+      setBuildings(buildingList)
+    } catch {
+      if (websiteLoadActiveRef.current) {
+        setError(CONNECTION_ERROR_MESSAGE)
+      }
+    } finally {
+      if (websiteLoadActiveRef.current) {
+        setLoading(false)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    websiteLoadActiveRef.current = true
+    if (!isPwa) {
+      Promise.resolve().then(loadWebsiteNavigation)
       return () => {
-        active = false
+        websiteLoadActiveRef.current = false
       }
     }
 
@@ -368,12 +395,13 @@ function UserPage() {
     window.addEventListener('offline', handleOffline)
     document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => {
+      websiteLoadActiveRef.current = false
       window.clearInterval(intervalId)
       window.removeEventListener('online', handleOnline)
       window.removeEventListener('offline', handleOffline)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [isPwa, performCampusSync])
+  }, [isPwa, loadWebsiteNavigation, performCampusSync])
 
   useEffect(() => {
     if (!isPwa || route || !campusDatasetRef.current) {
@@ -1711,7 +1739,20 @@ function UserPage() {
                   )}
 
                   {message && <p className="user-navigation-message" role="status">{message}</p>}
-                  {error && <p className="user-navigation-error" role="alert">{error}</p>}
+                  {error && (
+                    <>
+                      <p className="user-navigation-error" role="alert">{error}</p>
+                      {error === CONNECTION_ERROR_MESSAGE && !loading && (
+                        <button
+                          className="user-retry-button"
+                          onClick={loadWebsiteNavigation}
+                          type="button"
+                        >
+                          Retry
+                        </button>
+                      )}
+                    </>
+                  )}
 
                   <div className="user-route-actions">
                     <button
@@ -1735,7 +1776,7 @@ function UserPage() {
                       Clear
                     </button>
                   </div>
-                  {loading && <p className="user-navigation-loading">Loading campus locations…</p>}
+                  {loading && <p className="user-navigation-loading" role="status">{serverStatus}</p>}
                   {!loading && !error && rooms.length === 0 && (
                     <p className="user-navigation-loading">No rooms are available yet.</p>
                   )}

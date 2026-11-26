@@ -1994,6 +1994,22 @@ body.panel-resizing * {
 .user-clear-button:hover:not(:disabled) { color: var(--user-text); }
 .user-clear-button:disabled { cursor: not-allowed; opacity: 0.35; }
 
+.user-retry-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+  padding: 8px 12px;
+  border: 1px solid var(--user-border);
+  border-radius: 7px;
+  background: rgb(50 127 216 / 12%);
+  color: var(--user-blue);
+  font-size: 0.74rem;
+}
+
+.user-retry-button:hover {
+  border-color: var(--user-blue);
+  background: rgb(50 127 216 / 20%);
+}
+
 .user-context-panel {
   padding: 18px;
   border: 1px solid var(--user-border);
